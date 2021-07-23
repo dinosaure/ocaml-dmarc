@@ -1,0 +1,3 @@
+(executable
+ (name verify)
+ (libraries cmdliner dmarc dns-client.lwt))

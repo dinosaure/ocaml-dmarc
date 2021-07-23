@@ -1,0 +1,8 @@
+(executable
+ (name organization_domains)
+ (libraries dmarc alcotest))
+
+(rule
+ (alias runtest)
+ (action
+  (run ./organization_domains.exe)))

@@ -1,0 +1,98 @@
+module Lwt_scheduler = Dmarc.Sigs.Make (Lwt)
+
+module Flow = struct
+  type flow = Lwt_unix.file_descr
+
+  type +'a io = 'a Lwt.t
+
+  let input = Lwt_unix.read
+end
+
+module DNS = struct
+  include Dns_client_lwt
+
+  type +'a io = 'a Lwt.t
+
+  type error =
+    [ `Msg of string
+    | `No_data of [ `raw ] Domain_name.t * Dns.Soa.t
+    | `No_domain of [ `raw ] Domain_name.t * Dns.Soa.t ]
+
+  let getrrecord dns k domain_name = get_resource_record dns k domain_name
+end
+
+include
+  Dmarc.Make
+    (Lwt_scheduler)
+    (struct
+      include Lwt
+
+      let iter_p = Lwt_list.iter_p
+
+      let map_p = Lwt_list.map_p
+    end)
+    (Flow)
+    (DNS)
+
+open Rresult
+open Lwt.Infix
+
+let ctx sender helo ip =
+  Spf.empty |> fun ctx ->
+  Option.fold ~none:ctx
+    ~some:(fun helo -> Spf.with_sender (`HELO helo) ctx)
+    helo
+  |> fun ctx ->
+  Option.fold ~none:ctx
+    ~some:(fun sender -> Spf.with_sender (`MAILFROM sender) ctx)
+    sender
+  |> fun ctx -> Option.fold ~none:ctx ~some:(fun ip -> Spf.with_ip ip ctx) ip
+
+let run sender helo ip =
+  let ctx = ctx sender helo ip in
+  let dns = DNS.create () in
+  verify ~newline:LF ~ctx
+    ~epoch:(fun () -> Int64.of_float (Unix.gettimeofday ()))
+    dns Lwt_unix.stdin
+  >>= function
+  | Ok `Pass ->
+      Fmt.pr "DMARC: OK!\n%!" ;
+      assert false
+  | Ok (`Fail (spf, dkims)) ->
+      Fmt.epr "DMARC: ERR (SPF: %b, DKIM: %b)!\n%!" (R.is_ok spf)
+        (List.for_all (function Ok (`Valid _) -> true | _ -> false) dkims) ;
+      assert false
+  | Error err ->
+      Fmt.epr "%a.\n%!" Dmarc.pp_error err ;
+      assert false
+
+let run sender helo ip = Lwt_main.run (run sender helo ip)
+
+open Cmdliner
+
+let sender =
+  let parser str =
+    match R.(Emile.of_string str >>= Colombe_emile.to_path) with
+    | Ok v -> Ok v
+    | Error _ -> R.error_msgf "Invalid sender: %S" str in
+  let pp = Colombe.Path.pp in
+  Arg.conv (parser, pp)
+
+let sender =
+  let doc = "The sender of the given email." in
+  Arg.(value & opt (some sender) None & info [ "s"; "sender" ] ~doc)
+
+let domain_name = Arg.conv (Domain_name.of_string, Domain_name.pp)
+
+let helo =
+  let doc = "HELO/EHLO name used by the SMTP client." in
+  Arg.(value & opt (some domain_name) None & info [ "helo" ] ~doc)
+
+let ip =
+  let doc = "The IP address of the client." in
+  let ipaddr = Arg.conv (Ipaddr.of_string, Ipaddr.pp) in
+  Arg.(value & opt (some ipaddr) None & info [ "ip" ] ~doc)
+
+let cmd = (Term.(ret (const run $ sender $ helo $ ip)), Term.info "verify")
+
+let () = Term.(exit_status @@ eval cmd)

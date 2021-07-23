@@ -1,0 +1,28 @@
+(executable
+ (name download)
+ (modules download)
+ (libraries curl))
+
+(executable
+ (name serialize)
+ (modules serialize)
+ (libraries unix domain-name))
+
+(rule
+ (target public_suffix_list.dat)
+ (mode promote)
+ (action
+  (run ./download.exe)))
+
+(rule
+ (target organization_domains.ml)
+ (deps public_suffix_list.dat)
+ (mode promote)
+ (action
+  (run ./serialize.exe --source public_suffix_list.dat %{target})))
+
+(library
+ (name organization_domains)
+ (public_name public-suffix)
+ (modules organization_domains)
+ (libraries domain-name))

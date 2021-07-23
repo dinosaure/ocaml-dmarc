@@ -1,0 +1,3 @@
+(library
+ (name dmarc)
+ (libraries public-suffix rresult mrmime lwt uri dkim spf))

@@ -1,0 +1,39 @@
+opam-version: "2.0"
+name: "dmarc"
+synopsis: "DMARC support in OCaml"
+description: """DMARC implementation in OCaml"""
+maintainer: "Romain Calascibetta <romain.calascibetta@gmail.com>"
+authors: "Romain Calascibetta <romain.calascibetta@gmail.com>"
+license: "MIT"
+homepage: "https://github.com/dinosaure/ocaml-dmarc"
+doc: "https://dinosaure.github.io/ocaml-dmarc/"
+bug-reports: "https://github.com/dinosaure/ocaml-dmarc/issues"
+depends: [
+  "ocaml" {>= "4.08.0"}
+  "mrmime"
+  "spf"
+  "dkim"
+]
+build: [
+  ["dune" "build" "-p" name "-j" jobs]
+  ["dune" "runtest" "-p" name "-j" jobs] {with-test}
+]
+dev-repo: "git+https://github.com/dinosaure/blaze.git"
+pin-depends: [
+  [
+    "mrmime.dev"
+    "git+https://github.com/mirage/mrmime.git#4798bc06cf435febc0abe4d1a7b6e09b8572216d"
+  ]
+  [
+    "pecu.dev"
+    "git+https://github.com/mirage/pecu.git#b33965ed8ade1102ae1f18ba6c95aa5d696ec9c3"
+  ]
+  [
+    "dkim.dev"
+    "git+https://github.com/dinosaure/ocaml-dkim.git#ec4613460edebf5dcaf47b8c7706b1fc03fa139f"
+  ]
+  [
+    "spf.dev"
+    "git+https://github.com/dinosaure/ocaml-spf.git#a6eb6805035e5db125259cc84331e353983c8456"
+  ]
+]

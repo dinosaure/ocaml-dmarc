@@ -1,0 +1,20 @@
+opam-version: "2.0"
+name: "public-suffix"
+synopsis: "Public suffix of domain name suffixes in OCaml"
+description: """Public suffix of domain name suffixes in OCaml"""
+maintainer: "Romain Calascibetta <romain.calascibetta@gmail.com>"
+authors: "Romain Calascibetta <romain.calascibetta@gmail.com>"
+license: "MIT"
+homepage: "https://github.com/dinosaure/ocaml-dmarc"
+doc: "https://dinosaure.github.io/ocaml-dmarc/"
+bug-reports: "https://github.com/dinosaure/ocaml-dmarc/issues"
+depends: [
+  "ocaml" {>= "4.08.0"}
+  "domain-name"
+  "ocurl"
+]
+build: [
+  ["dune" "build" "-p" name "-j" jobs]
+  ["dune" "runtest" "-p" name "-j" jobs] {with-test}
+]
+dev-repo: "git+https://github.com/dinosaure/ocaml-dmarc.git"
