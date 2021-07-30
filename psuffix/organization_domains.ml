@@ -78,6 +78,7 @@ let organization_domains = [
 	"nordeste-idc.saveincloud.net";
 	"eastasia.azurestaticapps.net";
 	"privatizehealthinsurance.net";
+	"reservd.testing.thingdust.io";
 	"accident-investigation.aero";
 	"higashimatsushima.miyagi.jp";
 	"higashimatsuyama.saitama.jp";
@@ -92,6 +93,7 @@ let organization_domains = [
 	"paas.hosted-by-previder.com";
 	"eastus2.azurestaticapps.net";
 	"westus2.azurestaticapps.net";
+	"reservd.disrec.thingdust.io";
 	"passenger-association.aero";
 	"aizuwakamatsu.fukushima.jp";
 	"osakikamijima.hiroshima.jp";
@@ -112,6 +114,7 @@ let organization_domains = [
 	"s3.eu-west-2.amazonaws.com";
 	"s3.eu-west-3.amazonaws.com";
 	"s3.us-east-2.amazonaws.com";
+	"cdn.prod.atlassian-dev.net";
 	"*.backyards.banzaicloud.io";
 	"cloud.jelastic.open.tim.it";
 	"lon-1.paas.massivegrid.net";
@@ -195,6 +198,7 @@ let organization_domains = [
 	"sphinx.mythic-beasts.com";
 	"customer.speedpartner.de";
 	"cust.disrec.thingdust.io";
+	"reservd.dev.thingdust.io";
 	"friuli-veneziagiulia.it";
 	"friulivenezia-giulia.it";
 	"aizumisato.fukushima.jp";
@@ -236,6 +240,7 @@ let organization_domains = [
 	"*.compute.amazonaws.com";
 	"us-east-1.amazonaws.com";
 	"appspaceusercontent.com";
+	"instance.datadetect.com";
 	"cloud.fedoraproject.org";
 	"west1-us.cloudjiffy.net";
 	"devices.resinstaging.io";
@@ -898,6 +903,7 @@ let organization_domains = [
 	"cloudcontrolled.com";
 	"cloudcontrolapp.com";
 	"localhost.daplie.me";
+	"demo.datadetect.com";
 	"est-a-la-maison.com";
 	"est-a-la-masion.com";
 	"is-a-bookkeeper.com";
@@ -907,6 +913,7 @@ let organization_domains = [
 	"is-a-republican.com";
 	"is-an-anarchist.com";
 	"is-with-theband.com";
+	"tuleap-partners.com";
 	"north-kazakhstan.su";
 	"j.scaleforce.com.cy";
 	"fi.cloudplatform.fi";
@@ -930,6 +937,7 @@ let organization_domains = [
 	"wellbeingzone.co.uk";
 	"\209\129\208\176\208\188\208\176\209\128\208\176.\209\128\209\131\209\129";
 	"firewall-gateway.de";
+	"myspreadshop.com.au";
 	"hotelwithflight.com";
 	"wpenginepowered.com";
 	"certification.aero";
@@ -1259,6 +1267,7 @@ let organization_domains = [
 	"cloudsite.builders";
 	"*.quipelements.com";
 	"*.on-rancher.cloud";
+	"myspreadshop.co.uk";
 	"*.sensiosite.cloud";
 	"reserve-online.net";
 	"reserve-online.com";
@@ -1618,6 +1627,7 @@ let organization_domains = [
 	"sellsyourhome.org";
 	"space-to-rent.com";
 	"home-webserver.de";
+	"eero-stage.online";
 	"staging.onred.one";
 	"eu-1.evennode.com";
 	"eu-2.evennode.com";
@@ -2055,6 +2065,8 @@ let organization_domains = [
 	"service.gov.scot";
 	"myshopblocks.com";
 	"try-snowplow.com";
+	"myspreadshop.com";
+	"myspreadshop.net";
 	"*.svc.firenet.ch";
 	"woltlab-demo.com";
 	"community-pro.de";
@@ -2514,6 +2526,7 @@ let organization_domains = [
 	"qualifioapp.com";
 	"instantcloud.cn";
 	"myqnapcloud.com";
+	"itcouldbewor.se";
 	"\208\186\209\128\209\139\208\188.\209\128\209\131\209\129";
 	"\209\129\208\190\209\135\208\184.\209\128\209\131\209\129";
 	"my-firewall.org";
@@ -2521,6 +2534,21 @@ let organization_domains = [
 	"bounty-full.com";
 	"dev.static.land";
 	"storebase.store";
+	"myspreadshop.at";
+	"myspreadshop.be";
+	"myspreadshop.ca";
+	"myspreadshop.ch";
+	"myspreadshop.de";
+	"myspreadshop.dk";
+	"myspreadshop.es";
+	"myspreadshop.fi";
+	"myspreadshop.fr";
+	"myspreadshop.ie";
+	"myspreadshop.it";
+	"myspreadshop.nl";
+	"myspreadshop.no";
+	"myspreadshop.pl";
+	"myspreadshop.se";
 	"azimuth.network";
 	"lima-city.rocks";
 	"diskstation.org";
@@ -3225,6 +3253,7 @@ let organization_domains = [
 	"freeboxos.com";
 	"freebox-os.fr";
 	"cdn-edges.net";
+	"nog.community";
 	"*.gateway.dev";
 	"hasura-app.io";
 	"herokuapp.com";
@@ -3569,6 +3598,7 @@ let organization_domains = [
 	"t3l3p0rt.net";
 	"pimienta.org";
 	"*.advisor.ws";
+	"bitbucket.io";
 	"clic2000.net";
 	"cloud66.zone";
 	"cloudns.asia";
@@ -3685,6 +3715,7 @@ let organization_domains = [
 	"rackmaze.net";
 	"onrender.com";
 	"my-router.de";
+	"sellfy.store";
 	"shiftedit.io";
 	"appchizi.com";
 	"applinzi.com";
@@ -3693,6 +3724,7 @@ let organization_domains = [
 	"apps.lair.io";
 	"soc.srcf.net";
 	"temp-dns.com";
+	"supabase.net";
 	"dscloud.mobi";
 	"familyds.com";
 	"familyds.net";
@@ -4074,6 +4106,7 @@ let organization_domains = [
 	"dyn-ip24.de";
 	"definima.io";
 	"casacam.net";
+	"eero.online";
 	"service.one";
 	"asso.eu.org";
 	"dagestan.ru";
@@ -4202,6 +4235,8 @@ let organization_domains = [
 	"static.land";
 	"*.stolos.io";
 	"spacekit.io";
+	"supabase.co";
+	"supabase.in";
 	"syncloud.it";
 	"dscloud.biz";
 	"dsmynas.com";
@@ -4209,6 +4244,7 @@ let organization_domains = [
 	"dsmynas.org";
 	"synology.me";
 	"telebit.app";
+	"reservd.com";
 	"bloxcms.com";
 	"dray-dns.de";
 	"my-vigor.de";
@@ -4654,6 +4690,7 @@ let organization_domains = [
 	"seidat.net";
 	"storj.farm";
 	"utwente.io";
+	"su.paba.se";
 	"dscloud.me";
 	"vpnplus.to";
 	"edugit.org";
@@ -5203,6 +5240,7 @@ let organization_domains = [
 	"\227\129\191\227\130\147\227\129\170";
 	"\229\164\169\228\184\187\230\149\153";
 	"yodobashi";
+	"hlx3.page";
 	"apigee.io";
 	"b-data.io";
 	"cafjs.com";
@@ -5773,6 +5811,8 @@ let organization_domains = [
 	"\216\180\216\168\217\131\216\169";
 	"\216\168\217\138\216\170\217\131";
 	"yokohama";
+	"hlx.live";
+	"hlx.page";
 	"barsy.ca";
 	"carrd.co";
 	"radio.am";
@@ -7584,8 +7624,9 @@ let organization_domains = [
 	"ltd.ua";
 	"611.to";
 	"bnr.la";
-	"crd.co";
+	"drr.ac";
 	"uwu.ai";
+	"crd.co";
 	"ae.org";
 	"br.com";
 	"cn.com";
@@ -7733,10 +7774,10 @@ let organization_domains = [
 	"now.sh";
 	"cat.ax";
 	"app.gp";
-	"uwu.nu";
 	"vxl.sh";
 	"dev.vu";
 	"wbq.me";
+	"ynh.fr";
 	"za.net";
 	"za.org";
 	"co.ae";
@@ -8378,7 +8419,9 @@ let organization_domains = [
 	"yahoo";
 	"cc.ua";
 	"gv.vc";
+	"rs.ba";
 	"of.je";
+	"ju.mp";
 	"za.bz";
 	"cx.ua";
 	"co.ca";

@@ -2,6 +2,10 @@ module Sigs = Sigs
 open Rresult
 open Sigs
 
+let src = Logs.Src.create "dmarc"
+
+module Log = (val Logs.src_log src : Logs.LOG)
+
 type dmarc = {
   dkim_alignment : Value.mode;
   spf_alignment : Value.mode;
@@ -796,6 +800,10 @@ struct
       ]
     >>= function
     | [ `Unit; `DMARC (Ok dmarc); `SPF spf; `DKIM dkims ] ->
+        Log.debug (fun m ->
+            m "Got SPF result: %a."
+              Fmt.(result ~ok:(using snd Spf.pp_res) ~error:(using snd string))
+              spf) ;
         let result = identifier_alignment_checks info ~dmarc ~spf ~dkims in
         return (Ok result)
     | [ `Unit; `DMARC (Error err); _; _ ] -> return (Error err)

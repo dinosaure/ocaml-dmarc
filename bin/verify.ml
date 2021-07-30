@@ -66,9 +66,41 @@ let run sender helo ip =
       Fmt.epr "%a.\n%!" Dmarc.pp_error err ;
       assert false
 
-let run sender helo ip = Lwt_main.run (run sender helo ip)
+let run _ sender helo ip = Lwt_main.run (run sender helo ip)
 
 open Cmdliner
+
+let common_options = "COMMON OPTIONS"
+
+let verbosity =
+  let env = Arg.env_var "BLAZE_LOGS" in
+  Logs_cli.level ~docs:common_options ~env ()
+
+let renderer =
+  let env = Arg.env_var "BLAZE_FMT" in
+  Fmt_cli.style_renderer ~docs:common_options ~env ()
+
+let reporter ppf =
+  let report src level ~over k msgf =
+    let k _ =
+      over () ;
+      k () in
+    let with_metadata header _tags k ppf fmt =
+      Fmt.kpf k ppf
+        ("%a[%a]: " ^^ fmt ^^ "\n%!")
+        Logs_fmt.pp_header (level, header)
+        Fmt.(styled `Magenta string)
+        (Logs.Src.name src) in
+    msgf @@ fun ?header ?tags fmt -> with_metadata header tags k ppf fmt in
+  { Logs.report }
+
+let setup_logs style_renderer level =
+  Fmt_tty.setup_std_outputs ?style_renderer () ;
+  Logs.set_level level ;
+  Logs.set_reporter (reporter Fmt.stderr) ;
+  Option.is_none level
+
+let setup_logs = Term.(const setup_logs $ renderer $ verbosity)
 
 let sender =
   let parser str =
@@ -93,6 +125,7 @@ let ip =
   let ipaddr = Arg.conv (Ipaddr.of_string, Ipaddr.pp) in
   Arg.(value & opt (some ipaddr) None & info [ "ip" ] ~doc)
 
-let cmd = (Term.(ret (const run $ sender $ helo $ ip)), Term.info "verify")
+let cmd =
+  (Term.(ret (const run $ setup_logs $ sender $ helo $ ip)), Term.info "verify")
 
 let () = Term.(exit_status @@ eval cmd)
