@@ -1,7 +1,7 @@
 opam-version: "2.0"
 name: "public-suffix"
 synopsis: "Public suffix of domain name suffixes in OCaml"
-description: """Public suffix of domain name suffixes in OCaml"""
+description: "Public suffix of domain name suffixes in OCaml"
 maintainer: "Romain Calascibetta <romain.calascibetta@gmail.com>"
 authors: "Romain Calascibetta <romain.calascibetta@gmail.com>"
 license: "MIT"
@@ -12,6 +12,8 @@ depends: [
   "ocaml" {>= "4.08.0"}
   "domain-name"
   "ocurl"
+  "dune" {>= "2.9.0"}
+  "alcotest" {>= "1.4.0" & with-test}
 ]
 build: [
   ["dune" "build" "-p" name "-j" jobs]
