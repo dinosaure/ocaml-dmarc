@@ -26,20 +26,8 @@ build: [
 ]
 dev-repo: "git+https://github.com/dinosaure/blaze.git"
 pin-depends: [
-  [
-    "mrmime.dev"
-    "git+https://github.com/mirage/mrmime.git#f55a772100e3058eb1ac0d82f2968b946aab4514"
-  ]
-  [
-    "pecu.dev"
-    "git+https://github.com/mirage/pecu.git#f7cdd0b360651c971423d9a789dc962df00b3f94"
-  ]
-  [
-    "dkim.dev"
-    "git+https://github.com/dinosaure/ocaml-dkim.git#88eb8ad3a1fc117afa6f1e90ed4650e6ee337415"
-  ]
-  [
-    "spf.dev"
-    "git+https://github.com/dinosaure/ocaml-spf.git#b1c80233e0c9dc47acc7537df5ff0fd9b1c82538"
-  ]
+  [ "mrmime.dev" "git+https://github.com/mirage/mrmime.git#9784a03cdbbda61f250ec5c0a995ae9263fbcf4a" ]
+  [ "pecu.dev" "git+https://github.com/mirage/pecu.git#ce3fbfdf7d3785356bcb80e3cef3aebb05298494" ]
+  [ "dkim.dev" "git+https://github.com/dinosaure/ocaml-dkim.git#2e0ece4c65c02bfad9ba31acff72312d3a2ebe13" ]
+  [ "spf.dev" "git+https://github.com/dinosaure/ocaml-spf.git#8c8ae77f4ff57be9de16b63f9074af4b11701f3a" ]
 ]
