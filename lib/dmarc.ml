@@ -265,7 +265,7 @@ type elt =
 let pp_elt ppf = function
   | From (field_name, _, lst) ->
       Fmt.pf ppf "%a:@ %a" Mrmime.Field_name.pp field_name
-        Fmt.(list ~sep:(always "@ ") Emile.pp_mailbox)
+        Fmt.(list ~sep:(any "@ ") Emile.pp_mailbox)
         lst
   | DKIM (field_name, _, dkim) ->
       Fmt.pf ppf "%a:@ @[<hov>%a@]" Mrmime.Field_name.pp field_name Dkim.pp_dkim
