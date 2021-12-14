@@ -38,15 +38,15 @@ open Rresult
 open Lwt.Infix
 
 let ctx sender helo ip =
-  Spf.empty |> fun ctx ->
+  Uspf.empty |> fun ctx ->
   Option.fold ~none:ctx
-    ~some:(fun helo -> Spf.with_sender (`HELO helo) ctx)
+    ~some:(fun helo -> Uspf.with_sender (`HELO helo) ctx)
     helo
   |> fun ctx ->
   Option.fold ~none:ctx
-    ~some:(fun sender -> Spf.with_sender (`MAILFROM sender) ctx)
+    ~some:(fun sender -> Uspf.with_sender (`MAILFROM sender) ctx)
     sender
-  |> fun ctx -> Option.fold ~none:ctx ~some:(fun ip -> Spf.with_ip ip ctx) ip
+  |> fun ctx -> Option.fold ~none:ctx ~some:(fun ip -> Uspf.with_ip ip ctx) ip
 
 let run sender helo ip =
   let ctx = ctx sender helo ip in
