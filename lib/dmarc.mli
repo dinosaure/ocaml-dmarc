@@ -11,7 +11,7 @@ type dmarc
 
 val pp_dmarc : dmarc Fmt.t
 
-type spf_result = (Spf.ctx * Spf.res, Spf.ctx * string) result
+type spf_result = (Uspf.ctx * Uspf.res, Uspf.ctx * string) result
 
 type dkim_result =
   ( [ `Invalid of Dkim.signed Dkim.dkim | `Valid of Dkim.signed Dkim.dkim ],
@@ -26,7 +26,7 @@ type error =
   [ `DMARC_unreachable
   | `Invalid_DMARC of string
   | `Invalid_DMARC_policy of string
-  | `SPF_error_with of Spf.ctx * string
+  | `SPF_error_with of Uspf.ctx * string
   | `Invalid_domain of Emile.domain
   | `Invalid_email
   | `Missing_From_field
@@ -45,7 +45,7 @@ module Make
     (DNS : DNS with type +'a io = 'a IO.t) : sig
   val verify :
     ?newline:newline ->
-    ctx:Spf.ctx ->
+    ctx:Uspf.ctx ->
     epoch:(unit -> int64) ->
     DNS.t ->
     Flow.flow ->

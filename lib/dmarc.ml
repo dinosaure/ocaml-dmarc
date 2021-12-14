@@ -1,6 +1,11 @@
 module Sigs = Sigs
-open Rresult
 open Sigs
+
+let reword_error f = function
+  | Ok v -> Ok v 
+  | Error err -> Error (f err)
+
+let error_msgf fmt = Fmt.kstr (fun msg -> Error (`Msg msg)) fmt
 
 let src = Logs.Src.create "dmarc"
 
@@ -54,7 +59,7 @@ let dmarc_of_map map =
   match (Value.(find K.p map), Value.(find K.sp map)) with
   | Some (("quarantine" | "reject" | "none") as v), None ->
       let v = Value.policy_of_string v in
-      R.ok
+      Ok
         {
           dkim_alignment;
           spf_alignment;
@@ -70,7 +75,7 @@ let dmarc_of_map map =
       Some (("quarantine" | "reject" | "none") as v') ) ->
       let v = Value.policy_of_string v in
       let v' = Value.policy_of_string v' in
-      R.ok
+      Ok 
         {
           dkim_alignment;
           spf_alignment;
@@ -82,7 +87,7 @@ let dmarc_of_map map =
           feedbacks;
           failures;
         }
-  | None, _ -> R.error `Missing_DMARC_policy
+  | None, _ -> Error `Missing_DMARC_policy
   | Some v, _ ->
   match feedbacks with
   | _ :: _ ->
@@ -93,7 +98,7 @@ let dmarc_of_map map =
        * 1. if a "rua" tag is present and contains at least one syntactically valid reporting URI,
        *    the Mail Receiver SHOULD act as if a record containing a valid "v" tag and "p=none" was
        *    retrieved, and continue processing; *)
-      R.ok
+      Ok
         {
           dkim_alignment;
           spf_alignment;
@@ -106,9 +111,9 @@ let dmarc_of_map map =
           failures;
         }
       (* 2. otherwise, the Mail Receiver applies no DMARC processing to this message. *)
-  | [] -> R.error (`Invalid_DMARC_policy v)
+  | [] -> Error (`Invalid_DMARC_policy v)
 
-type spf_result = (Spf.ctx * Spf.res, Spf.ctx * string) result
+type spf_result = (Uspf.ctx * Uspf.res, Uspf.ctx * string) result
 
 type dkim_result =
   ( [ `Invalid of Dkim.signed Dkim.dkim | `Valid of Dkim.signed Dkim.dkim ],
@@ -259,7 +264,7 @@ let sanitize_input newline chunk len =
 type elt =
   | From of Mrmime.Field_name.t * Unstrctrd.t * Emile.mailbox list
   | DKIM of Mrmime.Field_name.t * Unstrctrd.t * Dkim.signed Dkim.dkim
-  | SPF of Mrmime.Field_name.t * Unstrctrd.t * Spf.spf
+  | SPF of Mrmime.Field_name.t * Unstrctrd.t * Uspf.spf
   | Field of Mrmime.Field_name.t * Unstrctrd.t
 
 let pp_elt ppf = function
@@ -271,7 +276,7 @@ let pp_elt ppf = function
       Fmt.pf ppf "%a:@ @[<hov>%a@]" Mrmime.Field_name.pp field_name Dkim.pp_dkim
         dkim
   | SPF (field_name, _, spf) ->
-      Fmt.pf ppf "%a:@ @[<hov>%a@]" Mrmime.Field_name.pp field_name Spf.pp_spf
+      Fmt.pf ppf "%a:@ @[<hov>%a@]" Mrmime.Field_name.pp field_name Uspf.pp_spf
         spf
   | Field (field_name, v) ->
       Fmt.pf ppf "%a:@ %S" Mrmime.Field_name.pp field_name
@@ -319,13 +324,14 @@ let p =
 let to_unstrctrd unstructured =
   let fold acc = function #Unstrctrd.elt as elt -> elt :: acc | _ -> acc in
   let unstrctrd = List.fold_left fold [] unstructured in
-  R.get_ok (Unstrctrd.of_list (List.rev unstrctrd))
+  match Unstrctrd.of_list (List.rev unstrctrd) with
+  | Ok v -> v | Error _ -> assert false
 
 let parse_from_field_value unstrctrd =
   let str = Unstrctrd.(to_utf_8_string (fold_fws unstrctrd)) in
   match Angstrom.parse_string ~consume:Prefix Emile.Parser.mailbox_list str with
   | Ok _ as v -> v
-  | Error _ -> R.error (`Invalid_From_field unstrctrd)
+  | Error _ -> Error (`Invalid_From_field unstrctrd)
 
 let extract_from fields =
   let exception Multiple_from in
@@ -345,11 +351,11 @@ let extract_from fields =
       fields ;
     !res
   with
-  | Some mailbox -> R.ok mailbox
+  | Some mailbox -> Ok mailbox
   | None ->
-      R.error `Missing_From_field
+      Error `Missing_From_field
       (* - Messages that have no RFC5322.From field at all are typically rejected. *)
-  | exception Multiple_from -> R.error `Multiple_mailboxes
+  | exception Multiple_from -> Error `Multiple_mailboxes
 
 (* TODO(dinosaure): RFC7489 talks about "syntactically valid __multi-valued__ RFC5322.From" field
  * as a valid case to initiate DMARC verification. But I don't know the meaning of such case! *)
@@ -359,9 +365,9 @@ let emile_domain_to_domain_name = function
     | `Addr (Emile.IPv6 _)
     | `Addr (Emile.Ext _)
     | `Literal _ ) as domain ->
-      R.error (`Invalid_domain domain)
+      Error (`Invalid_domain domain)
   | `Domain lst as domain ->
-      R.reword_error
+      reword_error
         (fun _ -> `Invalid_domain domain)
         (Domain_name.of_strings lst)
 
@@ -440,7 +446,7 @@ let invalid_dkim_record ~record dkim =
 let identifier_alignment_checks info ~dmarc ~spf ~dkims =
   let spf_aligned =
     match
-      (dmarc.spf_alignment, info.domain, Spf.domain (ctx_of_spf_result spf))
+      (dmarc.spf_alignment, info.domain, Uspf.domain (ctx_of_spf_result spf))
     with
     | Value.Strict, domain, Some domain' -> Domain_name.equal domain domain'
     | Value.Relaxed, domain, Some domain' -> (
@@ -487,7 +493,7 @@ type error =
   [ `DMARC_unreachable
   | `Invalid_DMARC of string
   | `Invalid_DMARC_policy of string
-  | `SPF_error_with of Spf.ctx * string
+  | `SPF_error_with of Uspf.ctx * string
   | `Invalid_domain of Emile.domain
   | `Invalid_email
   | `Missing_From_field
@@ -519,7 +525,7 @@ module Make
     (DNS : DNS with type +'a io = 'a IO.t) =
 struct
   module DKIM_scheduler = Dkim.Sigs.Make (IO)
-  module SPF_scheduler = Spf.Sigs.Make (IO)
+  module SPF_scheduler = Uspf.Sigs.Make (IO)
   open IO
 
   let dkim_scheduler =
@@ -532,8 +538,8 @@ struct
   let spf_scheduler =
     let open SPF_scheduler in
     {
-      Spf.Sigs.bind = (fun x f -> inj (IO.bind (prj x) (fun x -> prj (f x))));
-      Spf.Sigs.return = (fun x -> inj (IO.return x));
+      Uspf.Sigs.bind = (fun x f -> inj (IO.bind (prj x) (fun x -> prj (f x))));
+      Uspf.Sigs.return = (fun x -> inj (IO.return x));
     }
 
   let ( >>= ) = IO.bind
@@ -558,7 +564,7 @@ struct
           match
             ( Field_name.equal field_name Field_name.from,
               Field_name.equal field_name Dkim.field_dkim_signature,
-              Field_name.equal field_name Spf.field_received_spf,
+              Field_name.equal field_name Uspf.field_received_spf,
               w )
           with
           | true, false, false, Field.Unstructured -> (
@@ -569,20 +575,21 @@ struct
           | false, true, false, Field.Unstructured -> (
               let v = to_unstrctrd v in
               match
-                R.(Dkim.parse_dkim_field_value v >>= Dkim.post_process_dkim)
+                let ( >>= ) x f = Result.bind x f in
+                Dkim.parse_dkim_field_value v >>= Dkim.post_process_dkim
               with
               | Ok dkim -> go (DKIM (field_name, v, dkim) :: acc)
               | Error _ -> go (Field (field_name, v) :: acc))
           | false, false, true, Field.Unstructured -> (
               let v = to_unstrctrd v in
-              match Spf.parse_received_spf_field_value v with
+              match Uspf.parse_received_spf_field_value v with
               | Ok spf -> go (SPF (field_name, v, spf) :: acc)
               | Error _ -> go (Field (field_name, v) :: acc))
           | _, _, _, Field.Unstructured ->
               let v = to_unstrctrd v in
               go (Field (field_name, v) :: acc)
           | _ -> assert false)
-      | `Malformed _err -> return (R.error `Invalid_email)
+      | `Malformed _err -> return (Error `Invalid_email)
       | `End rest -> return (Ok (rest, List.rev acc))
       | `Await ->
           Flow.input flow raw 0 (Bytes.length raw) >>= fun len ->
@@ -595,7 +602,7 @@ struct
      * we must converte to an A-label. *)
     let { Emile.domain = domain, _; _ } = from in
     return (emile_domain_to_domain_name domain) >>? fun domain ->
-    return (R.ok { prelude; from; domain; fields })
+    return (Ok { prelude; from; domain; fields })
 
   let crlf digest n =
     let rec go = function
@@ -671,9 +678,9 @@ struct
       | Ok (_ttl, vs) -> return (Ok (Dns.Rr_map.Txt_set.elements vs))
       | Error (`Msg _ as msg) -> return (Error msg)
       | Error (`No_data (domain_name, _soa)) ->
-          return (R.error_msgf "No data for %a" Domain_name.pp domain_name)
+          return (error_msgf "No data for %a" Domain_name.pp domain_name)
       | Error (`No_domain (domain_name, _soa)) ->
-          return (R.error_msgf "%a not found" Domain_name.pp domain_name)
+          return (error_msgf "%a not found" Domain_name.pp domain_name)
 
     let gettxtrrecord dns domain_name =
       DKIM_scheduler.inj (gettxtrrecord dns domain_name)
@@ -697,7 +704,7 @@ struct
     | Ok (_ttl, vs) ->
         (* TODO(dinosaure): discard any TXT which does not start with v=DMARC1. *)
         let str = String.concat "" (Dns.Rr_map.Txt_set.elements vs) in
-        return R.(Decoder.parse_record str >>= dmarc_of_map)
+        return (let ( >>= ) x f = Result.bind x f in Decoder.parse_record str >>= dmarc_of_map)
     | Error _ ->
     match organization_domain ~domain with
     | None -> return (Error `DMARC_unreachable)
@@ -707,20 +714,20 @@ struct
         DNS.getrrecord dns Dns.Rr_map.Txt dmarc_domain >>= function
         | Ok (_ttl, vs) ->
             let str = String.concat "" (Dns.Rr_map.Txt_set.elements vs) in
-            return R.(Decoder.parse_record str >>= dmarc_of_map)
+            return (let ( >>= ) x f = Result.bind x f in Decoder.parse_record str >>= dmarc_of_map)
         | Error _ -> return (Error `DMARC_unreachable))
   (* TODO(dinosaure): check Section 6.6.3 to see how to get the DMARC policy.
    * The DMARC policy can comes from the organizational domain instead of the
    * domain given by RFC5322.From. *)
 
   let verify_spf ~ctx dns =
-    Spf.get ~ctx spf_scheduler dns (module SPF_DNS) |> SPF_scheduler.prj
+    Uspf.get ~ctx spf_scheduler dns (module SPF_DNS) |> SPF_scheduler.prj
     >>= function
     | Error (`Msg err) -> return (Error (ctx, err))
     | Ok record ->
-        Spf.check ~ctx spf_scheduler dns (module SPF_DNS) record
+        Uspf.check ~ctx spf_scheduler dns (module SPF_DNS) record
         |> SPF_scheduler.prj
-        >>| fun res -> R.ok (ctx, res)
+        >>| fun res -> Ok (ctx, res)
 
   let verify ?newline ~ctx ~epoch dns flow =
     extract_info ?newline flow >>? fun info ->
@@ -730,11 +737,11 @@ struct
       let open DKIM_scheduler in
       Dkim.extract_server dns dkim_scheduler (module DKIM_DNS) dkim
       |> prj
-      >>| R.reword_error (fun _ -> `DKIM_record_unreachable dkim)
+      >>| reword_error (fun _ -> `DKIM_record_unreachable dkim)
       >>? fun n ->
       Dkim.post_process_server n
       |> return
-      >>| R.reword_error (fun _ -> `Invalid_DKIM_record (dkim, n))
+      >>| reword_error (fun _ -> `Invalid_DKIM_record (dkim, n))
       >>? fun server ->
       Dkim.verify dkim_scheduler ~epoch fields
         (dkim_field_name, dkim_field_value)
@@ -802,7 +809,7 @@ struct
     | [ `Unit; `DMARC (Ok dmarc); `SPF spf; `DKIM dkims ] ->
         Log.debug (fun m ->
             m "Got SPF result: %a."
-              Fmt.(result ~ok:(using snd Spf.pp_res) ~error:(using snd string))
+              Fmt.(result ~ok:(using snd Uspf.pp_res) ~error:(using snd string))
               spf) ;
         let result = identifier_alignment_checks info ~dmarc ~spf ~dkims in
         return (Ok result)
