@@ -11,11 +11,9 @@ type 't state = {
 
 module type X = sig
   type +'a s
-
   type t
 
   external inj : 'a s -> ('a, t) io = "%identity"
-
   external prj : ('a, t) io -> 'a s = "%identity"
 end
 
@@ -23,7 +21,6 @@ module Common = struct
   type t
 
   external inj : 'a -> 'b = "%identity"
-
   external prj : 'a -> 'b = "%identity"
 end
 
@@ -35,7 +32,6 @@ end
 
 module type FLOW = sig
   type flow
-
   type +'a io
 
   val input : flow -> bytes -> int -> int -> int io
@@ -43,7 +39,6 @@ end
 
 module type DNS = sig
   type t
-
   type +'a io
 
   type error =
@@ -59,18 +54,11 @@ module type IO = sig
   type +'a t
 
   val return : 'a -> 'a t
-
   val bind : 'a t -> ('a -> 'b t) -> 'b t
-
   val both : 'a t -> 'b t -> ('a * 'b) t
-
   val join : unit t list -> unit t
-
   val pause : unit -> unit t
-
   val iter_p : ('a -> unit t) -> 'a list -> unit t
-
   val map_p : ('a -> 'b t) -> 'a list -> 'b list t
-
   val all : 'a t list -> 'a list t
 end

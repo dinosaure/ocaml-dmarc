@@ -1,13 +1,8 @@
 type policy = None | Quarantine | Reject
-
 type mode = Relaxed | Strict
-
 type interval = int
-
 type percent = int
-
 type keyword = string
-
 type uri = Uri.t * int64 option
 
 let pp_policy ppf = function
@@ -31,9 +26,7 @@ let mode_of_string = function
   | str -> Fmt.failwith "Invalid mode: %S" str
 
 let pp_interval = Fmt.int
-
 let pp_percent = Fmt.int
-
 let pp_keyword = Fmt.string
 
 let pp_uri ppf (uri, (weight : int64 option)) =

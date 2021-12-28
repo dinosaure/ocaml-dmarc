@@ -2,7 +2,6 @@ module Sigs = Sigs
 open Sigs
 
 type newline = LF | CRLF
-
 type info
 
 val pp_info : info Fmt.t

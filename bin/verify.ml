@@ -2,7 +2,6 @@ module Lwt_scheduler = Dmarc.Sigs.Make (Lwt)
 
 module Flow = struct
   type flow = Lwt_unix.file_descr
-
   type +'a io = 'a Lwt.t
 
   let input = Lwt_unix.read
@@ -28,7 +27,6 @@ include
       include Lwt
 
       let iter_p = Lwt_list.iter_p
-
       let map_p = Lwt_list.map_p
     end)
     (Flow)

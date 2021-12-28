@@ -1,4 +1,6 @@
 (executable
+ (enabled_if
+  (= %{context_name} promote))
  (name download)
  (modules download)
  (libraries curl))
@@ -9,6 +11,8 @@
  (libraries unix domain-name))
 
 (rule
+ (enabled_if
+  (= %{context_name} promote))
  (target public_suffix_list.dat)
  (mode promote)
  (action
@@ -17,7 +21,6 @@
 (rule
  (target organization_domains.ml)
  (deps public_suffix_list.dat)
- (mode promote)
  (action
   (run ./serialize.exe --source public_suffix_list.dat %{target})))
 
@@ -26,3 +29,8 @@
  (public_name public-suffix)
  (modules organization_domains)
  (libraries domain-name))
+
+(alias
+ (name promote)
+ (enabled_if
+  (= %{context_name} promote)))

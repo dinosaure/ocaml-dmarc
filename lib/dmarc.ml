@@ -1,12 +1,8 @@
 module Sigs = Sigs
 open Sigs
 
-let reword_error f = function
-  | Ok v -> Ok v 
-  | Error err -> Error (f err)
-
+let reword_error f = function Ok v -> Ok v | Error err -> Error (f err)
 let error_msgf fmt = Fmt.kstr (fun msg -> Error (`Msg msg)) fmt
-
 let src = Logs.Src.create "dmarc"
 
 module Log = (val Logs.src_log src : Logs.LOG)
@@ -75,7 +71,7 @@ let dmarc_of_map map =
       Some (("quarantine" | "reject" | "none") as v') ) ->
       let v = Value.policy_of_string v in
       let v' = Value.policy_of_string v' in
-      Ok 
+      Ok
         {
           dkim_alignment;
           spf_alignment;
@@ -123,13 +119,9 @@ type dkim_result =
 
 module Decoder = struct
   let ( or ) a b x = a x || b x
-
   let is_alpha = function 'a' .. 'z' | 'A' .. 'Z' -> true | _ -> false
-
   let is_digit = function '0' .. '9' -> true | _ -> false
-
   let is_wsp = function ' ' | '\t' -> true | _ -> false
-
   let is_dash = ( = ) '-'
 
   open Angstrom
@@ -174,7 +166,6 @@ module Decoder = struct
     binding ~key:"rf" parser
 
   let dmarc_version = binding ~key:"v" (string "DMARC1")
-
   let dmarc_sep = skip_while is_wsp *> char ';' *> skip_while is_wsp
 
   let dmarc_request =
@@ -198,7 +189,6 @@ module Decoder = struct
         >>= fun r -> return (x :: r) )
 
   let dmarc_adkim = binding ~key:"adkim" (choice [ string "r"; string "s" ])
-
   let dmarc_aspf = binding ~key:"aspf" (choice [ string "r"; string "s" ])
 
   let dmarc_ainterval =
@@ -325,7 +315,8 @@ let to_unstrctrd unstructured =
   let fold acc = function #Unstrctrd.elt as elt -> elt :: acc | _ -> acc in
   let unstrctrd = List.fold_left fold [] unstructured in
   match Unstrctrd.of_list (List.rev unstrctrd) with
-  | Ok v -> v | Error _ -> assert false
+  | Ok v -> v
+  | Error _ -> assert false
 
 let parse_from_field_value unstrctrd =
   let str = Unstrctrd.(to_utf_8_string (fold_fws unstrctrd)) in
@@ -433,11 +424,8 @@ let _filter_dkim_from_domain ?(alignment = Value.Relaxed) ~from fields =
   List.fold_left f [] fields |> List.rev
 
 let ctx_of_spf_result = function Ok (ctx, _) -> ctx | Error (ctx, _) -> ctx
-
 let valid dkim = Ok (`Valid dkim)
-
 let invalid dkim = Ok (`Invalid dkim)
-
 let dkim_record_unreachable dkim = Error (`DKIM_record_unreachable dkim)
 
 let invalid_dkim_record ~record dkim =
@@ -543,7 +531,6 @@ struct
     }
 
   let ( >>= ) = IO.bind
-
   let ( >>| ) x f = x >>= fun x -> return (f x)
 
   let ( >>? ) x f =
@@ -670,7 +657,6 @@ struct
 
   module DKIM_DNS = struct
     type backend = DKIM_scheduler.t
-
     type t = DNS.t
 
     let gettxtrrecord dns domain_name =
@@ -688,9 +674,7 @@ struct
 
   module SPF_DNS = struct
     type backend = SPF_scheduler.t
-
     type t = DNS.t
-
     type error = DNS.error
 
     let getrrecord dns record domain_name =
@@ -704,7 +688,9 @@ struct
     | Ok (_ttl, vs) ->
         (* TODO(dinosaure): discard any TXT which does not start with v=DMARC1. *)
         let str = String.concat "" (Dns.Rr_map.Txt_set.elements vs) in
-        return (let ( >>= ) x f = Result.bind x f in Decoder.parse_record str >>= dmarc_of_map)
+        return
+          (let ( >>= ) x f = Result.bind x f in
+           Decoder.parse_record str >>= dmarc_of_map)
     | Error _ ->
     match organization_domain ~domain with
     | None -> return (Error `DMARC_unreachable)
@@ -714,7 +700,9 @@ struct
         DNS.getrrecord dns Dns.Rr_map.Txt dmarc_domain >>= function
         | Ok (_ttl, vs) ->
             let str = String.concat "" (Dns.Rr_map.Txt_set.elements vs) in
-            return (let ( >>= ) x f = Result.bind x f in Decoder.parse_record str >>= dmarc_of_map)
+            return
+              (let ( >>= ) x f = Result.bind x f in
+               Decoder.parse_record str >>= dmarc_of_map)
         | Error _ -> return (Error `DMARC_unreachable))
   (* TODO(dinosaure): check Section 6.6.3 to see how to get the DMARC policy.
    * The DMARC policy can comes from the organizational domain instead of the

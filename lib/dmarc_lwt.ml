@@ -6,19 +6,12 @@ module Lwt_io = struct
   type +'a t = 'a Lwt.t
 
   let return = Lwt.return
-
   let bind = Lwt.bind
-
   let both = Lwt.both
-
   let join = Lwt.join
-
   let pause = Lwt.pause
-
   let iter_p = Lwt_list.iter_p
-
   let map_p = Lwt_list.map_p
-
   let all = Lwt.all
 end
 
