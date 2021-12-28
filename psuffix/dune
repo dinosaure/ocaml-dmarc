@@ -9,6 +9,7 @@
  (libraries unix domain-name))
 
 (rule
+ (alias download)
  (target public_suffix_list.dat)
  (mode promote)
  (action
