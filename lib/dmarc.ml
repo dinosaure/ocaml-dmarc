@@ -1,11 +1,12 @@
 module Sigs = Sigs
 open Sigs
 
-let reword_error f = function Ok v -> Ok v | Error err -> Error (f err)
-let error_msgf fmt = Fmt.kstr (fun msg -> Error (`Msg msg)) fmt
 let src = Logs.Src.create "dmarc"
 
 module Log = (val Logs.src_log src : Logs.LOG)
+
+let reword_error f = function Ok v -> Ok v | Error err -> Error (f err)
+let error_msgf fmt = Fmt.kstr (fun msg -> Error (`Msg msg)) fmt
 
 type dmarc = {
   dkim_alignment : Value.mode;
@@ -110,6 +111,10 @@ let dmarc_of_map map =
   | [] -> Error (`Invalid_DMARC_policy v)
 
 type spf_result = (Uspf.ctx * Uspf.res, Uspf.ctx * string) result
+
+let pp_spf_result ppf = function
+  | Ok (_ctx, res) -> Uspf.pp_res ppf res
+  | Error (_ctx, msg) -> Fmt.string ppf msg
 
 type dkim_result =
   ( [ `Invalid of Dkim.signed Dkim.dkim | `Valid of Dkim.signed Dkim.dkim ],
@@ -475,7 +480,7 @@ let identifier_alignment_checks info ~dmarc ~spf ~dkims =
   match (spf_aligned, spf, List.for_all is_valid dkims_aligned) with
   | true, Ok (_, (`Neutral | `None | `Pass _)), true -> `Pass
   | false, _, true -> `Pass
-  | _ -> `Fail (spf, dkims_aligned)
+  | _ -> `Fail (spf_aligned, spf, dkims_aligned)
 
 type error =
   [ `DMARC_unreachable
@@ -503,7 +508,7 @@ let pp_error ppf = function
   | `Domain_unaligned (a, b) ->
       Fmt.pf ppf "Domain %a unaligned with %a" Domain_name.pp a Domain_name.pp b
 
-type dmarc_result = [ `Pass | `Fail of spf_result * dkim_result list ]
+type dmarc_result = [ `Pass | `Fail of bool * spf_result * dkim_result list ]
 
 module Make
     (Scheduler : X with type +'a s = 'a Lwt.t)
@@ -599,6 +604,7 @@ struct
           go (pred n) in
     if n < 0 then Fmt.invalid_arg "Expect at least 0 <crlf>" else go n
 
+  (* TODO(dinosaure): may be replace it by [Dkim.extract_body]. *)
   let extract_body :
       ?newline:newline ->
       (unit -> string option IO.t) ->
@@ -627,6 +633,7 @@ struct
     let rec go stack =
       match Dkim.Body.decode decoder with
       | `Await -> (
+          Log.debug (fun m -> m "Await input for the email body.") ;
           stream () >>= function
           | None ->
               Dkim.Body.src decoder Bytes.empty 0 0 ;
@@ -639,6 +646,7 @@ struct
               Dkim.Body.src decoder (Bytes.of_string raw) 0 (String.length raw) ;
               go stack)
       | `End ->
+          Log.debug (fun m -> m "Body of the email extracted.") ;
           crlf relaxed 1 ;
           crlf simple 1 ;
           relaxed None ;
@@ -652,7 +660,8 @@ struct
           digest_stack simple stack ;
           simple (Some x) ;
           go [] in
-    Dkim.Body.src decoder raw 0 (String.length prelude) ;
+    if String.length prelude > 0
+    then Dkim.Body.src decoder raw 0 (String.length prelude) ;
     `Consume (go [])
 
   module DKIM_DNS = struct
@@ -717,8 +726,17 @@ struct
         |> SPF_scheduler.prj
         >>| fun res -> Ok (ctx, res)
 
+  let rec drain stream =
+    IO.pause () >>= fun () ->
+    Lwt_stream.get stream >>= function
+    | Some str ->
+        Log.debug (fun m -> m "Drain stream: %S." str) ;
+        drain stream
+    | None -> Lwt.return_unit
+
   let verify ?newline ~ctx ~epoch dns flow =
     extract_info ?newline flow >>? fun info ->
+    Log.debug (fun m -> m "DMARC info extracted.") ;
     let q = Queue.create () in
     let fields = List.map elt_to_field info.fields in
     let f (dkim_field_name, dkim_field_value, dkim, simple, relaxed) =
@@ -731,6 +749,7 @@ struct
       |> return
       >>| reword_error (fun _ -> `Invalid_DKIM_record (dkim, n))
       >>? fun server ->
+      Log.debug (fun m -> m "Verify DKIM field.") ;
       Dkim.verify dkim_scheduler ~epoch fields
         (dkim_field_name, dkim_field_value)
         ~simple:(fun () -> inj (Lwt_stream.get simple))
@@ -740,6 +759,14 @@ struct
       >>= function
       | true -> return (Ok (`Valid dkim))
       | false -> return (Ok (`Invalid dkim)) in
+    let f ((_, _, _, simple, relaxed) as v) =
+      (* XXX(dinosaure): It's possible that [f] does not consume [simple]
+       * and [relaxed]. In that case, we must ensure to consume them to
+       * unlock concurrent processes. Then, we must consume then _via_
+       * [IO.join] to ensure that one does not lock the other. *)
+      f v >>= fun res ->
+      IO.join [ drain simple; drain relaxed ] >>= fun () ->
+      Lwt.return res in
     let s_emitter x = Queue.push (`S x) q in
     let r_emitter x = Queue.push (`R x) q in
     let make_streams acc = function
@@ -750,55 +777,70 @@ struct
           :: acc
       | _ -> acc in
     let dkim_fields_with_streams = List.fold_left make_streams [] info.fields in
+    Log.debug (fun m ->
+        m "%d DKIM field(s) to verify." (List.length dkim_fields_with_streams)) ;
     let dkim_fields_with_streams = List.rev dkim_fields_with_streams in
     let dkim_fields, pushers = List.split dkim_fields_with_streams in
     let s_pushers, r_pushers = List.split pushers in
     let i_emmitter, i_pusher = Lwt_stream.create_bounded 10 in
     let rec consume tmp =
+      Log.debug (fun m -> m "Consume.") ;
       match Queue.pop q with
       | `Await -> (
+          Log.debug (fun m -> m "Waiting input.") ;
           Flow.input flow tmp 0 (Bytes.length tmp) >>= function
           | 0 ->
+              Log.debug (fun m -> m "No more input.") ;
               i_pusher#close ;
               consume tmp
           | len ->
+              Log.debug (fun m ->
+                  m "Fill the internal stream with a new chunk.") ;
               i_pusher#push (Bytes.sub_string tmp 0 len) >>= fun () ->
               consume tmp)
       | `S (Some str) ->
+          Log.debug (fun m -> m "Simple %S." str) ;
           IO.iter_p (fun v -> v#push str) s_pushers >>= fun () -> consume tmp
       | `R (Some str) ->
+          Log.debug (fun m -> m "Relaxed %S." str) ;
           IO.iter_p (fun v -> v#push str) r_pushers >>= fun () -> consume tmp
       | `S None ->
           List.iter (fun v -> v#close) s_pushers ;
           if List.for_all (fun v -> v#closed) r_pushers
-          then return ()
+          then (
+            Log.debug (fun m -> m "Terminate consumer.") ;
+            return ())
           else consume tmp
       | `R None ->
           List.iter (fun v -> v#close) r_pushers ;
           if List.for_all (fun v -> v#closed) s_pushers
-          then return ()
+          then (
+            Log.debug (fun m -> m "Terminate consumer.") ;
+            return ())
           else consume tmp
-      | exception Queue.Empty -> IO.pause () >>= fun () -> consume tmp in
+      | exception Queue.Empty ->
+          Log.debug (fun m -> m "Queue is empty, retry.") ;
+          IO.pause () >>= fun () -> consume tmp in
     let (`Consume th) =
       extract_body ?newline ~prelude:info.prelude
         (fun () ->
           Queue.push `Await q ;
+          Log.debug (fun m -> m "Send `Await to the consumer.") ;
           Lwt_stream.get i_emmitter)
         ~simple:s_emitter ~relaxed:r_emitter in
     let ( >|= ) x f = x >>= fun x -> return (f x) in
-    IO.all (* XXX(dinosaure): or [lift4]? *)
+    Lwt.all (* XXX(dinosaure): or [lift4]? *)
       [
-        (IO.join [ th; consume (Bytes.create 0x1000) ] >|= fun () -> `Unit);
+        (th >|= fun () -> `Unit);
+        (consume (Bytes.create 0x1000) >|= fun () -> `Unit);
         (extract_dmarc ~domain:info.domain dns >|= fun v -> `DMARC v);
         (verify_spf ~ctx dns >|= fun v -> `SPF v);
-        (IO.map_p f dkim_fields >|= fun v -> `DKIM v);
+        (Lwt_list.map_p f dkim_fields >|= fun v -> `DKIM v);
       ]
     >>= function
-    | [ `Unit; `DMARC (Ok dmarc); `SPF spf; `DKIM dkims ] ->
+    | [ `Unit; `Unit; `DMARC (Ok dmarc); `SPF spf; `DKIM dkims ] ->
         Log.debug (fun m ->
-            m "Got SPF result: %a."
-              Fmt.(result ~ok:(using snd Uspf.pp_res) ~error:(using snd string))
-              spf) ;
+            m "Got SPF result: %a." pp_spf_result spf) ;
         let result = identifier_alignment_checks info ~dmarc ~spf ~dkims in
         return (Ok result)
     | [ `Unit; `DMARC (Error err); _; _ ] -> return (Error err)

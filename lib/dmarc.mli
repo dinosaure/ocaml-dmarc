@@ -12,6 +12,8 @@ val pp_dmarc : dmarc Fmt.t
 
 type spf_result = (Uspf.ctx * Uspf.res, Uspf.ctx * string) result
 
+val pp_spf_result : spf_result Fmt.t
+
 type dkim_result =
   ( [ `Invalid of Dkim.signed Dkim.dkim | `Valid of Dkim.signed Dkim.dkim ],
     [ `DKIM_record_unreachable of Dkim.signed Dkim.dkim
@@ -35,7 +37,7 @@ type error =
 
 val pp_error : error Fmt.t
 
-type dmarc_result = [ `Pass | `Fail of spf_result * dkim_result list ]
+type dmarc_result = [ `Pass | `Fail of bool * spf_result * dkim_result list ]
 
 module Make
     (Scheduler : X with type +'a s = 'a Lwt.t)

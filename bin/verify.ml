@@ -46,9 +46,12 @@ let ctx sender helo ip =
     sender
   |> fun ctx -> Option.fold ~none:ctx ~some:(fun ip -> Uspf.with_ip ip ctx) ip
 
-let run sender helo ip =
+let run nameservers sender helo ip =
   let ctx = ctx sender helo ip in
-  let dns = DNS.create () in
+  let dns =
+    DNS.create
+      ~nameservers:(`Tcp, (nameservers :> DNS.Transport.io_addr list))
+      () in
   verify ~newline:LF ~ctx
     ~epoch:(fun () -> Int64.of_float (Unix.gettimeofday ()))
     dns Lwt_unix.stdin
@@ -56,26 +59,28 @@ let run sender helo ip =
   | Ok `Pass ->
       Fmt.pr "DMARC: OK!\n%!" ;
       assert false
-  | Ok (`Fail (spf, dkims)) ->
-      Fmt.epr "DMARC: ERR (SPF: %b, DKIM: %b)!\n%!" (R.is_ok spf)
+  | Ok (`Fail (spf_aligned, spf, dkims)) ->
+      Fmt.epr "DMARC: ERR (SPF aligned: %b, SPF: %a, DKIM: %b)!\n%!" spf_aligned
+        Dmarc.pp_spf_result spf
         (List.for_all (function Ok (`Valid _) -> true | _ -> false) dkims) ;
       assert false
   | Error err ->
       Fmt.epr "%a.\n%!" Dmarc.pp_error err ;
       assert false
 
-let run _ sender helo ip = Lwt_main.run (run sender helo ip)
+let run _ nameservers sender helo ip =
+  Lwt_main.run (run nameservers sender helo ip)
 
 open Cmdliner
 
 let common_options = "COMMON OPTIONS"
 
 let verbosity =
-  let env = Arg.env_var "BLAZE_LOGS" in
+  let env = Arg.env_var "DMARC_LOGS" in
   Logs_cli.level ~docs:common_options ~env ()
 
 let renderer =
-  let env = Arg.env_var "BLAZE_FMT" in
+  let env = Arg.env_var "DMARC_FMT" in
   Fmt_cli.style_renderer ~docs:common_options ~env ()
 
 let reporter ppf =
@@ -99,6 +104,34 @@ let setup_logs style_renderer level =
   Option.is_none level
 
 let setup_logs = Term.(const setup_logs $ renderer $ verbosity)
+
+let inet_addr_of_string str =
+  match Unix.inet_addr_of_string str with v -> Some v | exception _ -> None
+
+let pp_nameserver ppf = function
+  | `Plaintext (inet_addr, 53) -> Fmt.pf ppf "%a" Ipaddr.pp inet_addr
+  | `Plaintext (inet_addr, port) -> Fmt.pf ppf "%a:%d" Ipaddr.pp inet_addr port
+
+let nameserver =
+  let parser str =
+    match String.split_on_char ':' str with
+    | [ addr; port ] -> (
+        match (Ipaddr.of_string str, int_of_string port) with
+        | Ok addr, port -> Ok (`Plaintext (addr, port))
+        | Error _, port -> R.error_msgf "Invalid IP address: %s:%d" addr port
+        | exception _ -> R.error_msgf "Invalid nameserver: %S" str)
+    | [] -> (
+        match Ipaddr.of_string str with
+        | Ok addr -> Ok (`Plaintext (addr, 53))
+        | Error _ -> R.error_msgf "Invalid IP address: %S" str)
+    | _ -> R.error_msgf "Invalid nameserver: %S" str in
+  Arg.conv (parser, pp_nameserver)
+
+let google = `Plaintext (Ipaddr.of_string_exn "8.8.8.8", 53)
+
+let nameservers =
+  let doc = "DNS nameservers." in
+  Arg.(value & opt_all nameserver [ google ] & info [ "n"; "nameserver" ] ~doc)
 
 let sender =
   let parser str =
@@ -124,6 +157,7 @@ let ip =
   Arg.(value & opt (some ipaddr) None & info [ "ip" ] ~doc)
 
 let cmd =
-  (Term.(ret (const run $ setup_logs $ sender $ helo $ ip)), Term.info "verify")
+  ( Term.(ret (const run $ setup_logs $ nameservers $ sender $ helo $ ip)),
+    Term.info "verify" )
 
 let () = Term.(exit_status @@ eval cmd)
