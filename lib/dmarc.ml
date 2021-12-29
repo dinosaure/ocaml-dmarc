@@ -765,8 +765,7 @@ struct
        * unlock concurrent processes. Then, we must consume then _via_
        * [IO.join] to ensure that one does not lock the other. *)
       f v >>= fun res ->
-      IO.join [ drain simple; drain relaxed ] >>= fun () ->
-      Lwt.return res in
+      IO.join [ drain simple; drain relaxed ] >>= fun () -> Lwt.return res in
     let s_emitter x = Queue.push (`S x) q in
     let r_emitter x = Queue.push (`R x) q in
     let make_streams acc = function
@@ -839,8 +838,7 @@ struct
       ]
     >>= function
     | [ `Unit; `Unit; `DMARC (Ok dmarc); `SPF spf; `DKIM dkims ] ->
-        Log.debug (fun m ->
-            m "Got SPF result: %a." pp_spf_result spf) ;
+        Log.debug (fun m -> m "Got SPF result: %a." pp_spf_result spf) ;
         let result = identifier_alignment_checks info ~dmarc ~spf ~dkims in
         return (Ok result)
     | [ `Unit; `DMARC (Error err); _; _ ] -> return (Error err)
