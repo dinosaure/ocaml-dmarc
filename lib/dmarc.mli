@@ -37,7 +37,9 @@ type error =
 
 val pp_error : error Fmt.t
 
-type dmarc_result = [ `Pass | `Fail of bool * spf_result * dkim_result list ]
+type dmarc_result =
+  [ `Pass of [ `raw ] Domain_name.t
+  | `Fail of bool * spf_result * dkim_result list ]
 
 module Make
     (Scheduler : X with type +'a s = 'a Lwt.t)

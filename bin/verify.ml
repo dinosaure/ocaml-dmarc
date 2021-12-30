@@ -46,6 +46,25 @@ let ctx sender helo ip =
     sender
   |> fun ctx -> Option.fold ~none:ctx ~some:(fun ip -> Uspf.with_ip ip ctx) ip
 
+let pp_spf_result ppf = function
+  | Ok (_ctx, `Pass _) -> Fmt.(styled `Green string) ppf "pass"
+  | Ok (_ctx, v) -> Fmt.(styled `Red Uspf.pp_res) ppf v
+  | Error (_, _msg) -> Fmt.(styled `Red string) ppf "internal error"
+
+let pp_dkim_result ppf = function
+  | Ok (`Valid dkim) ->
+      Fmt.(styled `Green Domain_name.pp) ppf (Dkim.domain dkim)
+  | Ok (`Invalid dkim) ->
+      Fmt.(styled `Red Domain_name.pp) ppf (Dkim.domain dkim)
+  | Error (`DKIM_record_unreachable dkim) ->
+      Fmt.pf ppf "%a:unreachable"
+        Fmt.(styled `Red Domain_name.pp)
+        (Dkim.domain dkim)
+  | Error (`Invalid_DKIM_record (dkim, _)) ->
+      Fmt.pf ppf "%a:invalid-record"
+        Fmt.(styled `Red Domain_name.pp)
+        (Dkim.domain dkim)
+
 let run nameservers sender helo ip =
   let ctx = ctx sender helo ip in
   let dns =
@@ -56,17 +75,19 @@ let run nameservers sender helo ip =
     ~epoch:(fun () -> Int64.of_float (Unix.gettimeofday ()))
     dns Lwt_unix.stdin
   >>= function
-  | Ok `Pass ->
-      Fmt.pr "DMARC: OK!\n%!" ;
-      assert false
+  | Ok (`Pass v) ->
+      Fmt.pr "%a: %a\n%!" Domain_name.pp v Fmt.(styled `Green string) "pass" ;
+      Lwt.return (`Ok 0)
   | Ok (`Fail (spf_aligned, spf, dkims)) ->
-      Fmt.epr "DMARC: ERR (SPF aligned: %b, SPF: %a, DKIM: %b)!\n%!" spf_aligned
-        Dmarc.pp_spf_result spf
-        (List.for_all (function Ok (`Valid _) -> true | _ -> false) dkims) ;
-      assert false
+      Fmt.epr "%a: (SPF aligned: %b, SPF: %a, DKIM: %a)\n%!"
+        Fmt.(styled `Red string)
+        "error" spf_aligned pp_spf_result spf
+        Fmt.(Dump.list pp_dkim_result)
+        dkims ;
+      Lwt.return (`Ok 1)
   | Error err ->
-      Fmt.epr "%a.\n%!" Dmarc.pp_error err ;
-      assert false
+      Fmt.epr "%a: %a.\n%!" Fmt.(styled `Red string) "error" Dmarc.pp_error err ;
+      Lwt.return (`Error (false, Fmt.str "%a." Dmarc.pp_error err))
 
 let run _ nameservers sender helo ip =
   Lwt_main.run (run nameservers sender helo ip)

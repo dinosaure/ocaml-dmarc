@@ -443,12 +443,6 @@ let identifier_alignment_checks info ~dmarc ~spf ~dkims =
     with
     | Value.Strict, domain, Some domain' -> Domain_name.equal domain domain'
     | Value.Relaxed, domain, Some domain' -> (
-        Fmt.epr "Organizational domain of RFC5322.From: %a.\n%!"
-          Fmt.(Dump.option Domain_name.pp)
-          (organization_domain ~domain) ;
-        Fmt.epr "Organizational domain of SPF: %a.\n%!"
-          Fmt.(Dump.option Domain_name.pp)
-          (organization_domain ~domain:domain') ;
         match
           (organization_domain ~domain, organization_domain ~domain:domain')
         with
@@ -478,8 +472,8 @@ let identifier_alignment_checks info ~dmarc ~spf ~dkims =
     List.fold_left f [] dkims in
   let is_valid = function Ok (`Valid _) -> true | _ -> false in
   match (spf_aligned, spf, List.for_all is_valid dkims_aligned) with
-  | true, Ok (_, (`Neutral | `None | `Pass _)), true -> `Pass
-  | false, _, true -> `Pass
+  | true, Ok (_, (`Neutral | `None | `Pass _)), true -> `Pass info.domain
+  | false, _, true -> `Pass info.domain
   | _ -> `Fail (spf_aligned, spf, dkims_aligned)
 
 type error =
@@ -508,7 +502,9 @@ let pp_error ppf = function
   | `Domain_unaligned (a, b) ->
       Fmt.pf ppf "Domain %a unaligned with %a" Domain_name.pp a Domain_name.pp b
 
-type dmarc_result = [ `Pass | `Fail of bool * spf_result * dkim_result list ]
+type dmarc_result =
+  [ `Pass of [ `raw ] Domain_name.t
+  | `Fail of bool * spf_result * dkim_result list ]
 
 module Make
     (Scheduler : X with type +'a s = 'a Lwt.t)
