@@ -472,8 +472,9 @@ let identifier_alignment_checks info ~dmarc ~spf ~dkims =
     List.fold_left f [] dkims in
   let is_valid = function Ok (`Valid _) -> true | _ -> false in
   match (spf_aligned, spf, List.for_all is_valid dkims_aligned) with
-  | true, Ok (_, (`Neutral | `None | `Pass _)), true -> `Pass info.domain
-  | false, _, true -> `Pass info.domain
+  | true, Ok (_, (`Neutral | `None | `Pass _)), true ->
+      `Pass (false, info.domain)
+  | false, _, true -> `Pass (true, info.domain)
   | _ -> `Fail (spf_aligned, spf, dkims_aligned)
 
 type error =
@@ -503,7 +504,7 @@ let pp_error ppf = function
       Fmt.pf ppf "Domain %a unaligned with %a" Domain_name.pp a Domain_name.pp b
 
 type dmarc_result =
-  [ `Pass of [ `raw ] Domain_name.t
+  [ `Pass of bool * [ `raw ] Domain_name.t
   | `Fail of bool * spf_result * dkim_result list ]
 
 module Make
@@ -837,6 +838,6 @@ struct
         Log.debug (fun m -> m "Got SPF result: %a." pp_spf_result spf) ;
         let result = identifier_alignment_checks info ~dmarc ~spf ~dkims in
         return (Ok result)
-    | [ `Unit; `DMARC (Error err); _; _ ] -> return (Error err)
+    | [ `Unit; `Unit; `DMARC (Error err); _; _ ] -> return (Error err)
     | _ -> assert false
 end

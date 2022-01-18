@@ -75,7 +75,7 @@ let run nameservers sender helo ip =
     ~epoch:(fun () -> Int64.of_float (Unix.gettimeofday ()))
     dns Lwt_unix.stdin
   >>= function
-  | Ok (`Pass v) ->
+  | Ok (`Pass (_aligned, v)) ->
       Fmt.pr "%a: %a\n%!" Domain_name.pp v Fmt.(styled `Green string) "pass" ;
       Lwt.return (`Ok 0)
   | Ok (`Fail (spf_aligned, spf, dkims)) ->
