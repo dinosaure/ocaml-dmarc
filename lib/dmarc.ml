@@ -472,9 +472,9 @@ let identifier_alignment_checks info ~dmarc ~spf ~dkims =
     List.fold_left f [] dkims in
   let is_valid = function Ok (`Valid _) -> true | _ -> false in
   match (spf_aligned, spf, List.for_all is_valid dkims_aligned) with
-  | true, Ok (_, (`Neutral | `None | `Pass _)), true ->
-      `Pass (false, info.domain)
-  | false, _, true -> `Pass (true, info.domain)
+  | true, Ok (_, ((`Neutral | `None | `Pass _) as res)), true ->
+      `Pass (true, res, info.domain)
+  | false, _, true -> `Pass (false, `None, info.domain)
   | _ -> `Fail (spf_aligned, spf, dkims_aligned)
 
 type error =
@@ -504,7 +504,7 @@ let pp_error ppf = function
       Fmt.pf ppf "Domain %a unaligned with %a" Domain_name.pp a Domain_name.pp b
 
 type dmarc_result =
-  [ `Pass of bool * [ `raw ] Domain_name.t
+  [ `Pass of bool * Uspf.res * [ `raw ] Domain_name.t
   | `Fail of bool * spf_result * dkim_result list ]
 
 module Make

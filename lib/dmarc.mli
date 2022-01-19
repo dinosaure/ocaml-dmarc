@@ -38,7 +38,7 @@ type error =
 val pp_error : error Fmt.t
 
 type dmarc_result =
-  [ `Pass of bool * [ `raw ] Domain_name.t
+  [ `Pass of bool * Uspf.res * [ `raw ] Domain_name.t
   | `Fail of bool * spf_result * dkim_result list ]
 
 module Make
