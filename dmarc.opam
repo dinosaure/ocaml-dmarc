@@ -26,4 +26,4 @@ build: [
   ["dune" "build" "-p" name "-j" jobs]
   ["dune" "runtest" "-p" name "-j" jobs] {with-test}
 ]
-dev-repo: "git+https://github.com/dinosaure/blaze.git"
+dev-repo: "git+https://github.com/dinosaure/ocaml-dmarc.git"
