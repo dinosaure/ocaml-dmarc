@@ -97,11 +97,11 @@ open Cmdliner
 let common_options = "COMMON OPTIONS"
 
 let verbosity =
-  let env = Arg.env_var "DMARC_LOGS" in
+  let env = Cmd.Env.info "DMARC_LOGS" in
   Logs_cli.level ~docs:common_options ~env ()
 
 let renderer =
-  let env = Arg.env_var "DMARC_FMT" in
+  let env = Cmd.Env.info "DMARC_FMT" in
   Fmt_cli.style_renderer ~docs:common_options ~env ()
 
 let reporter ppf =
@@ -178,7 +178,8 @@ let ip =
   Arg.(value & opt (some ipaddr) None & info [ "ip" ] ~doc)
 
 let cmd =
-  ( Term.(ret (const run $ setup_logs $ nameservers $ sender $ helo $ ip)),
-    Term.info "verify" )
+  let info = Cmd.info "verify" in
+  Cmd.v info
+    Term.(ret (const run $ setup_logs $ nameservers $ sender $ helo $ ip))
 
-let () = Term.(exit_status @@ eval cmd)
+let () = exit (Cmd.eval' cmd)
