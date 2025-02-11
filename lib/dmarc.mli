@@ -1,5 +1,5 @@
+(*
 module Sigs = Sigs
-open Sigs
 
 type newline = LF | CRLF
 type info
@@ -40,17 +40,55 @@ val pp_error : error Fmt.t
 type dmarc_result =
   [ `Pass of bool * Uspf.res * [ `raw ] Domain_name.t
   | `Fail of bool * spf_result * dkim_result list ]
+*)
 
-module Make
-    (Scheduler : X with type +'a s = 'a Lwt.t)
-    (IO : IO with type +'a t = 'a Scheduler.s)
-    (Flow : FLOW with type +'a io = 'a IO.t)
-    (DNS : DNS with type +'a io = 'a IO.t) : sig
-  val verify :
-    ?newline:newline ->
-    ctx:Uspf.ctx ->
-    epoch:(unit -> int64) ->
-    DNS.t ->
-    Flow.flow ->
-    (dmarc_result, [> error ]) result IO.t
+type t
+
+module Verify : sig
+  type decoder
+
+  type error =
+    [ `Invalid_DMARC of string
+    | `Invalid_DMARC_policy of string
+    | `Missing_DMARC_policy
+    | `Invalid_email
+    | `DMARC_unreachable
+    | `Unexpected_response of Dns.Rr_map.k
+    | `Invalid_domain of Emile.domain
+    | `Missing_From_field
+    | `Missing_SPF_context
+    | `Invalid_domain_name_for_DKIM of Dkim.signed Dkim.t
+    | `Multiple_mailboxes ]
+
+  val pp_error : error Fmt.t
+
+  type info = {
+    spf : Uspf.Result.t option;
+    ctx : Uspf.ctx;
+    dmarc : t;
+    domain : [ `raw ] Domain_name.t;
+    dkims : dkim_result list;
+  }
+
+  and dkim_result = {
+    dkim : Dkim.signed Dkim.t;
+    domain_key : Dkim.domain_key;
+    fields : bool;
+    body : string;
+    aligned : bool;
+    pass : bool;
+  }
+
+  type decode =
+    [ `Await of decoder
+    | `Query of decoder * [ `raw ] Domain_name.t * Dns.Rr_map.k
+    | `Info of info
+    | error ]
+
+  val decoder : ?ctx:Uspf.ctx -> unit -> decoder
+  val decode : decoder -> decode
+  val src : decoder -> string -> int -> int -> decoder
+  val response : decoder -> 'a Dns.Rr_map.key -> 'a Uspf.response -> decoder
 end
+
+val is_aligned : Verify.info -> bool
