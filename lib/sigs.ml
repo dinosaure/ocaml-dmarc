@@ -5,8 +5,8 @@ end
 type (+'a, 't) io
 
 type 't state = {
-  bind : 'a 'b. ('a, 't) io -> ('a -> ('b, 't) io) -> ('b, 't) io;
-  return : 'a. 'a -> ('a, 't) io;
+    bind : 'a 'b. ('a, 't) io -> ('a -> ('b, 't) io) -> ('b, 't) io
+  ; return : 'a. 'a -> ('a, 't) io
 }
 
 module type X = sig

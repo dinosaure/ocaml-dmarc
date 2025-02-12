@@ -20,8 +20,8 @@ open Dmarc.Sigs
 module Make (DNS : DNS with type +'a io = 'a Lwt.t) = struct
   module Flow = struct
     type flow = {
-      consumer : unit -> (string * int * int) option Lwt.t;
-      queue : (char, Bigarray.int8_unsigned_elt) Ke.Rke.t;
+        consumer : unit -> (string * int * int) option Lwt.t
+      ; queue : (char, Bigarray.int8_unsigned_elt) Ke.Rke.t
     }
 
     type +'a io = 'a Lwt.t
