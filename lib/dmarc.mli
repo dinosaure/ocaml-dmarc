@@ -44,6 +44,23 @@ type dmarc_result =
 
 type t
 
+module DKIM : sig
+  type t =
+    | Pass of { dkim : Dkim.signed Dkim.t; domain_key : Dkim.domain_key }
+    | Fail of { dkim : Dkim.signed Dkim.t; domain_key : Dkim.domain_key }
+    | Temperror of { dkim : Dkim.signed Dkim.t }
+    | Permerror of {
+        dkim : Dkim.signed Dkim.t;
+        field_name : Mrmime.Field_name.t;
+        value : Unstrctrd.t;
+        error : error;
+      }
+    | Neutral of { field_name : Mrmime.Field_name.t; value : Unstrctrd.t }
+    | Policy of { reason : string }
+
+  and error = [ `Invalid_domain_key | `Domain_key_unavailable ]
+end
+
 module Verify : sig
   type decoder
 
@@ -57,7 +74,6 @@ module Verify : sig
     | `Invalid_domain of Emile.domain
     | `Missing_From_field
     | `Missing_SPF_context
-    | `Invalid_domain_name_for_DKIM of Dkim.signed Dkim.t
     | `Multiple_mailboxes ]
 
   val pp_error : error Fmt.t
@@ -67,22 +83,12 @@ module Verify : sig
     ctx : Uspf.ctx;
     dmarc : t;
     domain : [ `raw ] Domain_name.t;
-    dkims : dkim_result list;
-  }
-
-  and dkim_result = {
-    dkim : Dkim.signed Dkim.t;
-    domain_key : Dkim.domain_key;
-    fields : bool;
-    body : string;
-    aligned : bool;
-    pass : bool;
   }
 
   type decode =
     [ `Await of decoder
     | `Query of decoder * [ `raw ] Domain_name.t * Dns.Rr_map.k
-    | `Info of info
+    | `Info of info * DKIM.t list * [ `Pass | `Fail ]
     | error ]
 
   val decoder : ?ctx:Uspf.ctx -> unit -> decoder
@@ -90,5 +96,3 @@ module Verify : sig
   val src : decoder -> string -> int -> int -> decoder
   val response : decoder -> 'a Dns.Rr_map.key -> 'a Uspf.response -> decoder
 end
-
-val is_aligned : Verify.info -> bool

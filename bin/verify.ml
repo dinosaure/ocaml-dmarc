@@ -98,7 +98,24 @@ let reporter ppf =
 
 let () = Fmt_tty.setup_std_outputs ~style_renderer:`Ansi_tty ~utf_8:true ()
 let () = Logs.set_reporter (reporter Fmt.stdout)
-let () = Logs.set_level ~all:true (Some Logs.Debug)
+(* let () = Logs.set_level ~all:true (Some Logs.Debug) *)
+
+let show_spf info =
+  Fmt.pr "spf=%a smtp.mailfrom=%a\n"
+    Fmt.(option ~none:(any "none") Uspf.Result.pp)
+    info.Dmarc.Verify.spf Domain_name.pp
+    (Option.get (Uspf.domain info.ctx))
+
+let show_dkim = function
+  | Dmarc.DKIM.Pass { dkim; _ } ->
+      Fmt.pr "dkim=pass header.i=@%a\n" Domain_name.pp (Dkim.domain dkim)
+  | Fail { dkim; _ } ->
+      Fmt.pr "dkim=fail header.i=@%a\n" Domain_name.pp (Dkim.domain dkim)
+  | Temperror { dkim } ->
+      Fmt.pr "dkim=temperror header.i=@%a\n" Domain_name.pp (Dkim.domain dkim)
+  | Permerror { dkim; _ } ->
+      Fmt.pr "dkim=permerror header.i=@%a\n" Domain_name.pp (Dkim.domain dkim)
+  | _ -> Fmt.pr "dkim=error\n"
 
 let run _quiet newline input =
   let ic, ic_close =
@@ -121,7 +138,14 @@ let run _quiet newline input =
         let str = Bytes.sub_string buf 0 len in
         let decoder = Dmarc.Verify.src decoder str 0 (String.length str) in
         go decoder
-    | `Info info -> Fmt.pr "SPF & DKIM aligned? %b\n%!" (Dmarc.is_aligned info)
+    | `Info (info, dkims, `Pass) ->
+        show_spf info ;
+        List.iter show_dkim dkims ;
+        Fmt.pr "dmarc=pass\n%!"
+    | `Info (info, dkims, `Fail) ->
+        show_spf info ;
+        List.iter show_dkim dkims ;
+        Fmt.pr "dmarc=fail\n%!"
     | `Await decoder ->
         let len = Stdlib.input ic buf 0 (Bytes.length buf) in
         let str = Bytes.sub_string buf 0 len in
