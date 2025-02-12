@@ -933,7 +933,8 @@ module Encoder = struct
     let sep = ((fun ppf () -> eval ppf [ cut ]), ()) in
     eval ppf
       [
-        tbox 1; !!domain_name; char $ ';'; new_line; !!(spf ~receiver); !!(list ~sep dkim); !!dmarc; close; new_line
+        tbox 1; !!domain_name; char $ ';'; new_line; !!(spf ~receiver)
+      ; !!(list ~sep dkim); !!dmarc; close; new_line
       ]
       receiver info dkims (info, value)
 end

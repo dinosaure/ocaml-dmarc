@@ -58,3 +58,6 @@ val to_field :
      receiver:Emile.domain
   -> Verify.info * DKIM.t list * [ `Pass | `Fail ]
   -> Mrmime.Field_name.t * Unstrctrd.t
+
+val organization_domain :
+  domain:_ Domain_name.t -> [ `raw ] Domain_name.t option
