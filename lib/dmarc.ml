@@ -623,9 +623,19 @@ module Verify = struct
             let* { Emile.domain = domain, _; _ } = extract_from fields in
             emile_domain_to_domain_name domain in
           let ctx =
-            let fn = function SPF _ -> true | _ -> false in
-            match (List.find_opt fn fields, t.ctx) with
-            | Some (SPF (_, _, { Uspf.Extract.ctx; _ })), None -> Ok ctx
+            let fn = function
+              | SPF (_, _, { Uspf.Extract.ctx; _ }) -> Some ctx
+              | _ -> None in
+            let ctxs = List.filter_map fn fields in
+            let fn = function
+              | None -> Fun.const None
+              | Some ctx0 -> Uspf.merge ctx0 in
+            let ctx =
+              match ctxs with
+              | [] -> None
+              | ctx :: ctxs -> List.fold_left fn (Some ctx) ctxs in
+            match (ctx, t.ctx) with
+            | Some ctx, None -> Ok ctx
             | _, Some ctx -> Ok ctx
             | _ -> Error `Missing_SPF_context in
           match (from, ctx) with
@@ -818,13 +828,6 @@ end
 module Encoder = struct
   open Prettym
 
-  (* value = token / quoted-string
-     authserv-id = value
-     authres-payload = [CFWS] authserv-id
-              [ CFWS authres-version ]
-              ( no-result / 1*resinfo ) [CFWS] CRLF
-     Keyword = Ldh-str *)
-
   let spf ?receiver ppf info =
     let domain ppf domain_name =
       eval ppf [ char $ '@'; !!string ] (Domain_name.to_string domain_name)
@@ -945,3 +948,72 @@ let to_field ~receiver result =
   let v = Prettym.to_string (Encoder.field ~receiver) result in
   let _, v = Result.get_ok (Unstrctrd.of_string v) in
   (field_authentication_results, v)
+
+module Authentication_results = struct
+  module Decoder = struct
+    open Angstrom
+
+    let is_white = function ' ' | '\t' -> true | _ -> false
+    let is_digit = function '0' .. '9' -> true | _ -> false
+    let ldh_str = Emile.Parser.ldh_str
+    let keyword = ldh_str
+    let value = Mrmime.Content_type.Decoder.value
+    let ignore_spaces = skip_while is_white
+    let crlf = string "\r\n"
+
+    let no_result =
+      ignore_spaces *> char ';' *> ignore_spaces *> string "none"
+      >>| fun _none -> `None
+
+    let authres_version = take_while1 is_digit
+    let authserv_id = value
+
+    let method_ =
+      keyword >>= fun m ->
+      let version = ignore_spaces *> char '/' *> take_while1 is_digit in
+      option None (version >>| Option.some) >>| fun version -> (m, version)
+
+    let result = keyword
+
+    let methodspec =
+      ignore_spaces *> method_ >>= fun m ->
+      ignore_spaces *> char '=' *> ignore_spaces *> result >>| fun r -> (m, r)
+
+    let reasonspec =
+      string "reason" *> ignore_spaces *> char '=' *> ignore_spaces *> value
+
+    let ptype = keyword
+    let property = string "mailfrom" <|> string "rcptto" <|> keyword
+
+    let mailbox =
+      let local_part =
+        option None (Emile.Parser.local_part >>| Option.some)
+        <* option () (char '@' >>| fun _ -> ()) in
+      let domain_name = Dkim.Decoder.domain_name >>| fun v -> `Domain v in
+      option None local_part >>= fun local_part ->
+      domain_name >>| fun domain_name -> `Mailbox (local_part, domain_name)
+
+    let pvalue =
+      let value = value >>| fun v -> `Value v in
+      ignore_spaces *> (mailbox <|> value) <* ignore_spaces
+
+    let propspec =
+      ptype >>= fun t ->
+      ignore_spaces *> char '.' *> ignore_spaces *> property >>= fun p ->
+      ignore_spaces *> char '=' *> pvalue >>| fun value -> (t, p, value)
+
+    let resinfo =
+      ignore_spaces *> char ';' *> methodspec >>= fun m ->
+      option None (ignore_spaces *> reasonspec >>| Option.some)
+      >>= fun reason ->
+      option [] (ignore_spaces *> many1 propspec) >>= fun properties ->
+      return (m, reason, properties)
+
+    let _authres_payload =
+      ignore_spaces *> authserv_id >>= fun id ->
+      option None (ignore_spaces *> authres_version >>| Option.some)
+      >>= fun version ->
+      no_result <|> (many1 resinfo >>| fun lst -> `Result lst)
+      >>= fun results -> ignore_spaces *> crlf *> return (id, version, results)
+  end
+end
