@@ -1,3 +1,11 @@
 (executable
  (name verify)
- (libraries fmt.cli logs.cli fmt.tty logs.fmt cmdliner dmarc dns-client.lwt))
+ (libraries
+  fpath
+  fmt.cli
+  logs.cli
+  fmt.tty
+  logs.fmt
+  cmdliner
+  dmarc
+  dns-client.unix))

@@ -2,10 +2,4 @@
  (name dmarc)
  (public_name dmarc)
  (modules dmarc sigs value)
- (libraries logs public-suffix dns mrmime lwt uri dkim uspf))
-
-(library
- (name dmarc_lwt)
- (public_name dmarc.lwt)
- (modules dmarc_lwt)
- (libraries lwt dmarc))
+ (libraries logs public-suffix dns mrmime uri dkim uspf))

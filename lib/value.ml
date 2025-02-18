@@ -49,8 +49,8 @@ module K = struct
   let sp : string key =
     Key.create
       {
-        name = "Requested Mail Receiver policy for sub-domains";
-        pp = Fmt.string;
+        name = "Requested Mail Receiver policy for sub-domains"
+      ; pp = Fmt.string
       }
 
   let adkim : mode key =
@@ -81,8 +81,8 @@ module K = struct
   let rua : uri list key =
     Key.create
       {
-        name = "Addresses to which aggregate feedback is to be sent";
-        pp = Fmt.(Dump.list pp_uri);
+        name = "Addresses to which aggregate feedback is to be sent"
+      ; pp = Fmt.(Dump.list pp_uri)
       }
 
   let ruf : uri list key =
@@ -90,8 +90,8 @@ module K = struct
       {
         name =
           "Addresses to which message-specific failure information is be \
-           reported";
-        pp = Fmt.(Dump.list pp_uri);
+           reported"
+      ; pp = Fmt.(Dump.list pp_uri)
       }
 end
 

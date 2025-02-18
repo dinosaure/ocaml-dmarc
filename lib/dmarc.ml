@@ -1,23 +1,22 @@
-module Sigs = Sigs
-open Sigs
+[@@@warning "-30"]
 
+let reword_error f = function Ok v -> Ok v | Error err -> Error (f err)
+let ( % ) f g = fun x -> f (g x)
+let invalid_argf fmt = Fmt.kstr invalid_arg fmt
 let src = Logs.Src.create "dmarc"
 
 module Log = (val Logs.src_log src : Logs.LOG)
 
-let reword_error f = function Ok v -> Ok v | Error err -> Error (f err)
-let error_msgf fmt = Fmt.kstr (fun msg -> Error (`Msg msg)) fmt
-
-type dmarc = {
-  dkim_alignment : Value.mode;
-  spf_alignment : Value.mode;
-  failure_reporting : [ `_0 | `_1 | `D | `S ];
-  policy : Value.policy * Value.policy;
-  percentage : Value.percent;
-  interval : Value.interval;
-  formats : string * string list;
-  feedbacks : Value.uri list;
-  failures : Value.uri list;
+type t = {
+    dkim_alignment : Value.mode
+  ; spf_alignment : Value.mode
+  ; failure_reporting : [ `_0 | `_1 | `D | `S ]
+  ; policy : Value.policy * Value.policy
+  ; percentage : Value.percent
+  ; interval : Value.interval
+  ; formats : string * string list
+  ; feedbacks : Value.uri list
+  ; failures : Value.uri list
 }
 
 let pp_fo ppf = function
@@ -26,7 +25,7 @@ let pp_fo ppf = function
   | `D -> Fmt.string ppf "d"
   | `S -> Fmt.string ppf "s"
 
-let pp_dmarc ppf dmarc =
+let pp ppf dmarc =
   Fmt.pf ppf
     "{ @[<hov>adkim= %a;@ aspf= %a;@ fo= %a;@ p= %a;@ sp= %a;@ pct= %a%%;@ ri= \
      %a;@ rfmt= @[<hov>%a@];@ rua= @[<hov>%a@];@ ruf= @[<hov>%a@];@] }"
@@ -41,7 +40,7 @@ let pp_dmarc ppf dmarc =
     Fmt.(Dump.list Value.pp_uri)
     dmarc.failures
 
-let dmarc_of_map map =
+let of_map map =
   let dkim_alignment =
     Option.value ~default:Value.Relaxed Value.(find K.adkim map) in
   let spf_alignment =
@@ -58,31 +57,31 @@ let dmarc_of_map map =
       let v = Value.policy_of_string v in
       Ok
         {
-          dkim_alignment;
-          spf_alignment;
-          failure_reporting;
-          policy = (v, v);
-          percentage;
-          interval;
-          formats;
-          feedbacks;
-          failures;
+          dkim_alignment
+        ; spf_alignment
+        ; failure_reporting
+        ; policy = (v, v)
+        ; percentage
+        ; interval
+        ; formats
+        ; feedbacks
+        ; failures
         }
-  | ( Some (("quarantine" | "reject" | "none") as v),
-      Some (("quarantine" | "reject" | "none") as v') ) ->
+  | ( Some (("quarantine" | "reject" | "none") as v)
+    , Some (("quarantine" | "reject" | "none") as v') ) ->
       let v = Value.policy_of_string v in
       let v' = Value.policy_of_string v' in
       Ok
         {
-          dkim_alignment;
-          spf_alignment;
-          failure_reporting;
-          policy = (v, v');
-          percentage;
-          interval;
-          formats;
-          feedbacks;
-          failures;
+          dkim_alignment
+        ; spf_alignment
+        ; failure_reporting
+        ; policy = (v, v')
+        ; percentage
+        ; interval
+        ; formats
+        ; feedbacks
+        ; failures
         }
   | None, _ -> Error `Missing_DMARC_policy
   | Some v, _ ->
@@ -97,30 +96,18 @@ let dmarc_of_map map =
        *    retrieved, and continue processing; *)
       Ok
         {
-          dkim_alignment;
-          spf_alignment;
-          failure_reporting;
-          policy = (Value.None, Value.None);
-          percentage;
-          interval;
-          formats;
-          feedbacks;
-          failures;
+          dkim_alignment
+        ; spf_alignment
+        ; failure_reporting
+        ; policy = (Value.None, Value.None)
+        ; percentage
+        ; interval
+        ; formats
+        ; feedbacks
+        ; failures
         }
       (* 2. otherwise, the Mail Receiver applies no DMARC processing to this message. *)
   | [] -> Error (`Invalid_DMARC_policy v)
-
-type spf_result = (Uspf.ctx * Uspf.res, Uspf.ctx * string) result
-
-let pp_spf_result ppf = function
-  | Ok (_ctx, res) -> Uspf.pp_res ppf res
-  | Error (_ctx, msg) -> Fmt.string ppf msg
-
-type dkim_result =
-  ( [ `Invalid of Dkim.signed Dkim.dkim | `Valid of Dkim.signed Dkim.dkim ],
-    [ `DKIM_record_unreachable of Dkim.signed Dkim.dkim
-    | `Invalid_DKIM_record of Dkim.signed Dkim.dkim * Dkim.map ] )
-  result
 
 module Decoder = struct
   let ( or ) a b x = a x || b x
@@ -229,74 +216,11 @@ module Decoder = struct
     | Error _ -> Error (`Invalid_DMARC str)
 end
 
-type newline = LF | CRLF
-
-let sub_string_and_replace_newline chunk len =
-  let count = ref 0 in
-  String.iter
-    (function '\n' -> incr count | _ -> ())
-    (Bytes.sub_string chunk 0 len) ;
-  let plus = !count in
-  let pos = ref 0 in
-  let res = Bytes.create (len + plus) in
-  for i = 0 to len - 1 do
-    match Bytes.unsafe_get chunk i with
-    | '\n' ->
-        Bytes.unsafe_set res !pos '\r' ;
-        Bytes.unsafe_set res (!pos + 1) '\n' ;
-        pos := !pos + 2
-    | chr ->
-        Bytes.unsafe_set res !pos chr ;
-        incr pos
-  done ;
-  Bytes.unsafe_to_string res
-
-let sanitize_input newline chunk len =
-  match newline with
-  | CRLF -> Bytes.sub_string chunk 0 len
-  | LF -> sub_string_and_replace_newline chunk len
-
-type elt =
+type field =
   | From of Mrmime.Field_name.t * Unstrctrd.t * Emile.mailbox list
-  | DKIM of Mrmime.Field_name.t * Unstrctrd.t * Dkim.signed Dkim.dkim
-  | SPF of Mrmime.Field_name.t * Unstrctrd.t * Uspf.spf
+  | DKIM of Mrmime.Field_name.t * Unstrctrd.t * Dkim.signed Dkim.t
+  | SPF of Mrmime.Field_name.t * Unstrctrd.t * Uspf.Extract.field
   | Field of Mrmime.Field_name.t * Unstrctrd.t
-
-let pp_elt ppf = function
-  | From (field_name, _, lst) ->
-      Fmt.pf ppf "%a:@ %a" Mrmime.Field_name.pp field_name
-        Fmt.(list ~sep:(any "@ ") Emile.pp_mailbox)
-        lst
-  | DKIM (field_name, _, dkim) ->
-      Fmt.pf ppf "%a:@ @[<hov>%a@]" Mrmime.Field_name.pp field_name Dkim.pp_dkim
-        dkim
-  | SPF (field_name, _, spf) ->
-      Fmt.pf ppf "%a:@ @[<hov>%a@]" Mrmime.Field_name.pp field_name Uspf.pp_spf
-        spf
-  | Field (field_name, v) ->
-      Fmt.pf ppf "%a:@ %S" Mrmime.Field_name.pp field_name
-        (Unstrctrd.to_utf_8_string v)
-
-let elt_to_field = function
-  | From (field_name, v, _) -> (field_name, v)
-  | DKIM (field_name, v, _) -> (field_name, v)
-  | SPF (field_name, v, _) -> (field_name, v)
-  | Field (field_name, v) -> (field_name, v)
-
-type info = {
-  prelude : string;
-  fields : elt list;
-  from : Emile.mailbox;
-  domain : [ `raw ] Domain_name.t;
-}
-
-let pp_info ppf info =
-  Fmt.pf ppf
-    "{ @[<hov>prelude= %S;@ fields= @[<hov>%a@];@ from= @[<hov>%a@];@ domain= \
-     @[<hov>%a@];@] }"
-    info.prelude
-    Fmt.(Dump.list pp_elt)
-    info.fields Emile.pp_mailbox info.from Domain_name.pp info.domain
 
 let p =
   let open Mrmime in
@@ -319,9 +243,7 @@ let p =
 let to_unstrctrd unstructured =
   let fold acc = function #Unstrctrd.elt as elt -> elt :: acc | _ -> acc in
   let unstrctrd = List.fold_left fold [] unstructured in
-  match Unstrctrd.of_list (List.rev unstrctrd) with
-  | Ok v -> v
-  | Error _ -> assert false
+  Result.get_ok (Unstrctrd.of_list (List.rev unstrctrd))
 
 let parse_from_field_value unstrctrd =
   let str = Unstrctrd.(to_utf_8_string (fold_fws unstrctrd)) in
@@ -367,16 +289,6 @@ let emile_domain_to_domain_name = function
         (fun _ -> `Invalid_domain domain)
         (Domain_name.of_strings lst)
 
-let domain_aligned ~relaxed dmarc v =
-  match relaxed with
-  | true -> Domain_name.is_subdomain ~subdomain:v ~domain:dmarc.domain
-  | false -> Domain_name.equal v dmarc.domain
-
-let _domain_aligned ~relaxed dmarc v =
-  match domain_aligned ~relaxed dmarc v with
-  | true -> Ok ()
-  | false -> Error (`Domain_unaligned (v, dmarc.domain))
-
 (* XXX(dinosaure): See RFC 7489, 3.2. *)
 let rec organization_domain ~domain =
   let open Organization_domains in
@@ -398,446 +310,833 @@ and find ~domain = function
         | Ok v -> Some v
         | Error _ -> find ~domain r)
 
-let _filter_dkim_from_domain ?(alignment = Value.Relaxed) ~from fields =
-  let f acc = function
-    | DKIM (field_name, v, dkim) as field -> (
-        let d = Dkim.domain dkim in
-        (* XXX(dinosaure): According to RFC 7489, 3.1.1:
+module SPF = struct
+  type 'a t =
+    | S_query :
+        'x Domain_name.t * 'a Uspf.record * ('a Uspf.response -> 'b Uspf.t)
+        -> 'b t
+    | S_done : 'a -> 'a t
+    | S_result : Uspf.Result.t -> 'a t
 
-           In relaxed mode, the organizational Domains of both the [DKIM]-
-           authenticated signing domain (taken from the value of the "d=" tag in
-           the signature) and that of the RFC5322.From domain must be equal if
-           the identifiers are to be considered aligned. In strict mode, only
-           an exact match between both of the Fully Qualified Domain Names
-           (FQDNs) is considered to produce Identifier Alignment. *)
-        match alignment with
-        | Value.Relaxed -> (
-            match
-              (organization_domain ~domain:d, organization_domain ~domain:from)
-            with
-            | Some a, Some b ->
-                if Domain_name.equal a b
-                then field :: acc
-                else Field (field_name, v) :: acc
-            | _ -> Field (field_name, v) :: acc)
-        | Value.Strict ->
-            let fqdn_a = d and fqdn_b = from in
-            if Domain_name.equal fqdn_a fqdn_b
-            then field :: acc
-            else Field (field_name, v) :: acc)
-    | field -> field :: acc in
-  List.fold_left f [] fields |> List.rev
+  type computation =
+    | SPF_query :
+        'x Domain_name.t * 'a Uspf.record * ('a Uspf.response -> 'b Uspf.t)
+        -> computation
+    | SPF_result : Uspf.Result.t -> computation
 
-let ctx_of_spf_result = function Ok (ctx, _) -> ctx | Error (ctx, _) -> ctx
-let valid dkim = Ok (`Valid dkim)
-let invalid dkim = Ok (`Invalid dkim)
-let dkim_record_unreachable dkim = Error (`DKIM_record_unreachable dkim)
+  let eval : type a. a Uspf.t -> computation =
+    let rec go : type a. a Uspf.t -> a t = function
+      | Request (dn, r, fn) -> S_query (dn, r, fn)
+      | Return v -> S_done v
+      | Map (x, fn) -> (
+          match go x with
+          | S_done x -> S_done (fn x)
+          | S_result _ as result -> result
+          | S_query (dn, r, fn') ->
+              let fn resp = Uspf.Map (fn' resp, fn) in
+              S_query (dn, r, fn)
+          | exception Uspf.Result result -> S_result result)
+      | Tries lst ->
+          let rec iter = function
+            | [] -> Uspf.Return ()
+            | fn :: fns ->
+            match go (fn ()) with
+            | S_done () -> iter fns
+            | S_query (dn, r, fn') ->
+                let fn resp = iter ((fun () -> fn' resp) :: fns) in
+                Uspf.Request (dn, r, fn)
+            | S_result result -> Uspf.terminate result in
+          go (iter lst)
+      | Choose_on c ->
+      match go (c.fn ()) with
+      | S_done _ as value -> value
+      | S_query _ as query -> query
+      | S_result _ as result -> result
+      | exception Uspf.Result result ->
+          let none _ = Uspf.terminate result in
+          let some = Fun.id in
+          let fn =
+            match result with
+            | `None -> Option.fold ~none ~some c.none
+            | `Neutral -> Option.fold ~none ~some c.neutral
+            | `Fail -> Option.fold ~none ~some c.fail
+            | `Softfail -> Option.fold ~none ~some c.softfail
+            | `Temperror -> Option.fold ~none ~some c.temperror
+            | `Permerror -> Option.fold ~none ~some c.permerror
+            | `Pass m -> (
+                fun () -> match c.pass with Some fn -> fn m | None -> none ())
+          in
+          let m = fn () in
+          go m in
+    fun m ->
+      match go m with
+      | S_done _ -> SPF_result `None
+      | S_query (dn, r, fn) -> SPF_query (dn, r, fn)
+      | S_result result -> SPF_result result
+      | exception Uspf.Result result -> SPF_result result
 
-let invalid_dkim_record ~record dkim =
-  Error (`Invalid_DKIM_record (dkim, record))
-
-let identifier_alignment_checks info ~dmarc ~spf ~dkims =
-  let spf_aligned =
-    match
-      (dmarc.spf_alignment, info.domain, Uspf.domain (ctx_of_spf_result spf))
-    with
-    | Value.Strict, domain, Some domain' -> Domain_name.equal domain domain'
-    | Value.Relaxed, domain, Some domain' -> (
-        match
-          (organization_domain ~domain, organization_domain ~domain:domain')
-        with
+  let aligned ~dmarc ~domain ctx =
+    let spf_alignment = dmarc.spf_alignment in
+    match (spf_alignment, domain, Uspf.domain ctx) with
+    | Value.Strict, d, Some d' -> Domain_name.equal d d'
+    | Value.Relaxed, d, Some d' -> (
+        let d = organization_domain ~domain:d in
+        let d' = organization_domain ~domain:d' in
+        match (d, d') with
         | Some a, Some b -> Domain_name.equal a b
         | _ -> false)
-    | _, _, None -> false in
-  let dkims_aligned =
-    let f acc dkim_result =
-      let dkim, ctor =
-        match dkim_result with
-        | Ok (`Valid dkim) -> (dkim, valid)
-        | Ok (`Invalid dkim) -> (dkim, invalid)
-        | Error (`DKIM_record_unreachable dkim) ->
-            (dkim, dkim_record_unreachable)
-        | Error (`Invalid_DKIM_record (dkim, record)) ->
-            (dkim, invalid_dkim_record ~record) in
-      match (dmarc.dkim_alignment, info.domain, Dkim.domain dkim) with
-      | Value.Strict, domain, domain' when Domain_name.equal domain domain' ->
-          ctor dkim :: acc
-      | Value.Relaxed, domain, domain' -> (
-          match
-            (organization_domain ~domain, organization_domain ~domain:domain')
-          with
-          | Some a, Some b when Domain_name.equal a b -> ctor dkim :: acc
-          | _ -> acc (* XXX(dinosaure): not sure! *))
-      | Value.Strict, _, _ -> acc in
-    List.fold_left f [] dkims in
-  let is_valid = function Ok (`Valid _) -> true | _ -> false in
-  match (spf_aligned, spf, List.for_all is_valid dkims_aligned) with
-  | true, Ok (_, ((`Neutral | `None | `Pass _) as res)), true ->
-      `Pass (true, res, info.domain)
-  | false, _, true -> `Pass (false, `None, info.domain)
-  | _ -> `Fail (spf_aligned, spf, dkims_aligned)
+    | _, _, None -> false
 
-type error =
-  [ `DMARC_unreachable
-  | `Invalid_DMARC of string
-  | `Invalid_DMARC_policy of string
-  | `SPF_error_with of Uspf.ctx * string
-  | `Invalid_domain of Emile.domain
-  | `Invalid_email
-  | `Missing_From_field
-  | `Multiple_mailboxes
-  | `Missing_DMARC_policy
-  | `Domain_unaligned of [ `raw ] Domain_name.t * [ `raw ] Domain_name.t ]
+  let pass : Uspf.Result.t -> bool = function `Pass _ -> true | _ -> false
+end
 
-let pp_error ppf = function
-  | `DMARC_unreachable -> Fmt.string ppf "DMARC unreachable"
-  | `Invalid_DMARC record -> Fmt.pf ppf "Invalid DMARC record %S" record
-  | `Invalid_DMARC_policy policy -> Fmt.pf ppf "Invalid DMARC policy %S" policy
-  | `SPF_error_with (_ctx, err) -> Fmt.pf ppf "SPF error: %s" err
-  | `Invalid_domain domain ->
-      Fmt.pf ppf "Invalid domain: %a" Emile.pp_domain domain
-  | `Invalid_email -> Fmt.pf ppf "Invalid email"
-  | `Missing_From_field -> Fmt.pf ppf "Missing From field"
-  | `Multiple_mailboxes -> Fmt.pf ppf "Multiple senders"
-  | `Missing_DMARC_policy -> Fmt.string ppf "Missing DMARC policy"
-  | `Domain_unaligned (a, b) ->
-      Fmt.pf ppf "Domain %a unaligned with %a" Domain_name.pp a Domain_name.pp b
+module Refl = struct
+  type ('a, 'b) t = Refl : ('a, 'a) t
 
-type dmarc_result =
-  [ `Pass of bool * Uspf.res * [ `raw ] Domain_name.t
-  | `Fail of bool * spf_result * dkim_result list ]
+  let equal : type a b. a Uspf.record -> b Uspf.record -> (a, b) t option =
+   fun a b ->
+    match (a, b) with
+    | Soa, Soa -> Some Refl
+    | Ns, Ns -> Some Refl
+    | Mx, Mx -> Some Refl
+    | Cname, Cname -> Some Refl
+    | A, A -> Some Refl
+    | Aaaa, Aaaa -> Some Refl
+    | Ptr, Ptr -> Some Refl
+    | Srv, Srv -> Some Refl
+    | Dnskey, Dnskey -> Some Refl
+    | Caa, Caa -> Some Refl
+    | Tlsa, Tlsa -> Some Refl
+    | Sshfp, Sshfp -> Some Refl
+    | Txt, Txt -> Some Refl
+    | Ds, Ds -> Some Refl
+    | Rrsig, Rrsig -> Some Refl
+    | Nsec, Nsec -> Some Refl
+    | Nsec3, Nsec3 -> Some Refl
+    | Loc, Loc -> Some Refl
+    | Null, Null -> Some Refl
+    | Unknown _, Unknown _ -> Some Refl
+    | _ -> None
+end
 
-module Make
-    (Scheduler : X with type +'a s = 'a Lwt.t)
-    (* TODO *)
-    (IO : IO with type +'a t = 'a Scheduler.s)
-    (Flow : FLOW with type +'a io = 'a IO.t)
-    (DNS : DNS with type +'a io = 'a IO.t) =
-struct
-  module DKIM_scheduler = Dkim.Sigs.Make (IO)
-  module SPF_scheduler = Uspf.Sigs.Make (IO)
-  open IO
+module DKIM = struct
+  type t =
+    | Pass of { dkim : Dkim.signed Dkim.t; domain_key : Dkim.domain_key }
+    | Fail of { dkim : Dkim.signed Dkim.t; domain_key : Dkim.domain_key }
+    | Temperror of { dkim : Dkim.signed Dkim.t }
+    | Permerror of {
+          dkim : Dkim.signed Dkim.t
+        ; field_name : Mrmime.Field_name.t
+        ; value : Unstrctrd.t
+        ; error : error
+      }
+    | Neutral of { field_name : Mrmime.Field_name.t; value : Unstrctrd.t }
 
-  let dkim_scheduler =
-    let open DKIM_scheduler in
-    {
-      Dkim.Sigs.bind = (fun x f -> inj (IO.bind (prj x) (fun x -> prj (f x))));
-      Dkim.Sigs.return = (fun x -> inj (IO.return x));
-    }
+  and signature = {
+      dkim : Dkim.signed Dkim.t
+    ; domain_key : Dkim.domain_key
+    ; fields : bool
+    ; body : string
+  }
 
-  let spf_scheduler =
-    let open SPF_scheduler in
-    {
-      Uspf.Sigs.bind = (fun x f -> inj (IO.bind (prj x) (fun x -> prj (f x))));
-      Uspf.Sigs.return = (fun x -> inj (IO.return x));
-    }
+  and error = [ `Invalid_domain_key | `Domain_key_unavailable ]
 
-  let ( >>= ) = IO.bind
-  let ( >>| ) x f = x >>= fun x -> return (f x)
+  let from_signature { dkim; domain_key; fields; body = bh } =
+    let pass =
+      let _, Dkim.Hash_value (k, bh') = Dkim.signature_and_hash dkim in
+      let bh' = Digestif.to_raw_string k bh' in
+      fields && Eqaf.equal bh bh' in
+    if pass then Pass { dkim; domain_key } else Fail { dkim; domain_key }
 
-  let ( >>? ) x f =
-    x >>= function Ok x -> f x | Error err -> return (Error err)
+  let aligned ~dmarc ~domain = function
+    | Pass { dkim; _ } -> (
+        let dkim_alignment = dmarc.dkim_alignment in
+        match (dkim_alignment, domain, Dkim.domain dkim) with
+        | Value.Strict, d, d' -> Domain_name.equal d d'
+        | Value.Relaxed, d, d' -> (
+            let d = organization_domain ~domain:d in
+            let d' = organization_domain ~domain:d' in
+            match (d, d') with
+            | Some a, Some b -> Domain_name.equal a b
+            | _ -> false))
+    | _ -> false
+end
 
-  (* XXX(dinosaure): Step 1 of RFC 7489, Section 6.6.2. *)
-  let extract_info :
-      ?newline:newline -> Flow.flow -> (info, [> error ]) result IO.t =
-   fun ?(newline = LF) flow ->
+module Verify = struct
+  type error =
+    [ `Invalid_DMARC of string
+    | `Invalid_DMARC_policy of string
+    | `Missing_DMARC_policy
+    | `Invalid_email
+    | `DMARC_unreachable
+    | `Unexpected_response of Dns.Rr_map.k
+    | `Invalid_domain of Emile.domain
+    | `Missing_From_field
+    | `Missing_SPF_context
+    | `Multiple_mailboxes ]
+
+  let pp_error ppf = function
+    | `Invalid_DMARC _ -> Fmt.string ppf "Invalid DMARC"
+    | `Invalid_DMARC_policy _ -> Fmt.string ppf "Invalid DMARC policy"
+    | `Missing_DMARC_policy -> Fmt.string ppf "Missing DMARC policy"
+    | `Invalid_email -> Fmt.string ppf "Invalid email"
+    | `DMARC_unreachable -> Fmt.string ppf "DMARC unreachable"
+    | `Unexpected_response _ -> Fmt.string ppf "Unexpected DNS response"
+    | `Invalid_domain _ -> Fmt.string ppf "Invalid domain"
+    | `Missing_From_field -> Fmt.string ppf "Missing From field"
+    | `Missing_SPF_context -> Fmt.string ppf "Missing SPF context"
+    | `Multiple_mailboxes -> Fmt.string ppf "Multiple mailboxes"
+
+  type decoder = {
+      input : bytes
+    ; input_pos : int
+    ; input_len : int
+    ; state : state
+    ; ctx : Uspf.ctx option
+  }
+
+  and raw = {
+      spf : SPF.computation
+    ; ctx : Uspf.ctx
+    ; response : response option
+    ; prelude : string
+    ; domain : [ `raw ] Domain_name.t
+    ; dmarc : dmarc
+    ; fields : field list
+    ; others : (Mrmime.Field_name.t * Unstrctrd.t) list
+    ; dkims : (Mrmime.Field_name.t * Unstrctrd.t * Dkim.signed Dkim.t) list
+  }
+
+  and info = {
+      spf : Uspf.Result.t
+    ; ctx : Uspf.ctx
+    ; dmarc : t
+    ; domain : [ `raw ] Domain_name.t
+  }
+
+  and state =
+    | Extraction of Mrmime.Hd.decoder * field list
+    | Queries of raw * dkim list * DKIM.t list
+    | Body of Dkim.Body.decoder * ctx list * DKIM.t list * info
+
+  and decode =
+    [ `Await of decoder
+    | `Query of decoder * [ `raw ] Domain_name.t * Dns.Rr_map.k
+    | `Info of info * DKIM.t list * [ `Pass | `Fail ]
+    | error ]
+
+  and ctx = Ctx : string * 'k Dkim.Digest.value -> ctx
+
+  and dkim = {
+      field_name : Mrmime.Field_name.t
+    ; value : Unstrctrd.t
+    ; dkim : Dkim.signed Dkim.t
+    ; domain_key : Dkim.domain_key
+  }
+
+  and response = Response : 'a Uspf.record * 'a Uspf.response -> response
+  and dmarc = Ask_dmarc | Ask_organization | DMARC of t
+
+  let decoder ?ctx () =
+    let input, input_pos, input_len = (Bytes.empty, 1, 0) in
+    let dec = Mrmime.Hd.decoder p in
+    let state = Extraction (dec, []) in
+    { input; input_pos; input_len; state; ctx }
+
+  let end_of_input decoder =
+    { decoder with input = Bytes.empty; input_pos = 0; input_len = min_int }
+
+  let src decoder src idx len =
+    if idx < 0 || len < 0 || idx + len > String.length src
+    then invalid_argf "Dmarc.Verify.src: source out of bounds" ;
+    let input = Bytes.unsafe_of_string src in
+    let input_pos = idx in
+    let input_len = idx + len - 1 in
+    let decoder = { decoder with input; input_pos; input_len } in
+    match decoder.state with
+    | Extraction (v, _) ->
+        Mrmime.Hd.src v src idx len ;
+        if len == 0 then end_of_input decoder else decoder
+    | Body (v, _, _, _) ->
+        Dkim.Body.src v input idx len ;
+        if len == 0 then end_of_input decoder else decoder
+    | Queries _ -> if len == 0 then end_of_input decoder else decoder
+
+  let response : type a.
+      decoder -> a Dns.Rr_map.key -> a Uspf.response -> decoder =
+   fun decoder record response ->
+    match decoder.state with
+    | Queries (raw, dkims, preempted) ->
+        let raw = { raw with response = Some (Response (record, response)) } in
+        let state = Queries (raw, dkims, preempted) in
+        { decoder with state }
+    | _ -> invalid_arg "Dmarc.Verify.response"
+
+  let src_rem decoder = decoder.input_len - decoder.input_pos + 1
+
+  let signatures ctxs =
+    let fn (Ctx (fields, ((dkim, dk, _) as value))) =
+      let body, fields = Dkim.Digest.verify ~fields value in
+      DKIM.from_signature { DKIM.dkim; domain_key = dk; fields; body } in
+    List.map fn ctxs
+
+  let rec extract t decoder fields =
     let open Mrmime in
-    let chunk = 0x1000 in
-    let raw = Bytes.create chunk in
-    let decoder = Hd.decoder p in
-    let rec go acc =
+    let rec go fields =
       match Hd.decode decoder with
       | `Field field -> (
-          let (Field.Field (field_name, w, v)) = Location.prj field in
-          match
-            ( Field_name.equal field_name Field_name.from,
-              Field_name.equal field_name Dkim.field_dkim_signature,
-              Field_name.equal field_name Uspf.field_received_spf,
-              w )
-          with
+          let (Field.Field (fn, w, v)) = Location.prj field in
+          let is_from = Field_name.equal fn Field_name.from in
+          let is_dkim_signature =
+            Field_name.equal fn Dkim.field_dkim_signature in
+          let is_received_spf = Field_name.equal fn Uspf.field_received_spf in
+          match (is_from, is_dkim_signature, is_received_spf, w) with
           | true, false, false, Field.Unstructured -> (
               let v = to_unstrctrd v in
               match parse_from_field_value v with
-              | Ok mailboxes -> go (From (field_name, v, mailboxes) :: acc)
-              | Error _ -> go (Field (field_name, v) :: acc))
+              | Ok ms -> go (From (fn, v, ms) :: fields)
+              | Error _ -> go (Field (fn, v) :: fields))
           | false, true, false, Field.Unstructured -> (
-              let v = to_unstrctrd v in
-              match
-                let ( >>= ) x f = Result.bind x f in
-                Dkim.parse_dkim_field_value v >>= Dkim.post_process_dkim
-              with
-              | Ok dkim -> go (DKIM (field_name, v, dkim) :: acc)
-              | Error _ -> go (Field (field_name, v) :: acc))
+              let v = Dkim.trim (to_unstrctrd v) in
+              match Dkim.of_unstrctrd v with
+              | Ok dkim ->
+                  Log.debug (fun m -> m "New DKIM field") ;
+                  go (DKIM (fn, v, dkim) :: fields)
+              | Error (`Msg msg) ->
+                  Log.warn (fun m ->
+                      m "Bad DKIM field: %s (%S)" msg
+                        (Unstrctrd.to_utf_8_string v)) ;
+                  go (Field (fn, v) :: fields))
           | false, false, true, Field.Unstructured -> (
               let v = to_unstrctrd v in
-              match Uspf.parse_received_spf_field_value v with
-              | Ok spf -> go (SPF (field_name, v, spf) :: acc)
-              | Error _ -> go (Field (field_name, v) :: acc))
+              match Uspf.Extract.of_unstrctrd v with
+              | Ok spf -> go (SPF (fn, v, spf) :: fields)
+              | Error _ -> go (Field (fn, v) :: fields))
           | _, _, _, Field.Unstructured ->
               let v = to_unstrctrd v in
-              go (Field (field_name, v) :: acc)
+              go (Field (fn, v) :: fields)
           | _ -> assert false)
-      | `Malformed _err -> return (Error `Invalid_email)
-      | `End rest -> return (Ok (rest, List.rev acc))
-      | `Await ->
-          Flow.input flow raw 0 (Bytes.length raw) >>= fun len ->
-          let raw = sanitize_input newline raw len in
-          Hd.src decoder raw 0 (String.length raw) ;
-          go acc in
-    go [] >>? fun (prelude, fields) ->
-    return (extract_from fields) >>? fun from ->
-    (* TODO(dinosaure): at this point, the domain name can be encoded with UTF-8,
-     * we must converte to an A-label. *)
-    let { Emile.domain = domain, _; _ } = from in
-    return (emile_domain_to_domain_name domain) >>? fun domain ->
-    return (Ok { prelude; from; domain; fields })
-
-  let crlf digest n =
-    let rec go = function
-      | 0 -> ()
-      | n ->
-          digest (Some "\r\n") ;
-          go (pred n) in
-    if n < 0 then Fmt.invalid_arg "Expect at least 0 <crlf>" else go n
-
-  (* TODO(dinosaure): may be replace it by [Dkim.extract_body]. *)
-  let extract_body :
-      ?newline:newline ->
-      (unit -> string option IO.t) ->
-      prelude:string ->
-      simple:(string option -> unit) ->
-      relaxed:(string option -> unit) ->
-      [ `Consume of unit IO.t ] =
-   fun ?(newline = LF) stream ~prelude ~simple ~relaxed ->
-    let decoder = Dkim.Body.decoder () in
-    let chunk = 0x1000 in
-    let raw = Bytes.create (max chunk (String.length prelude)) in
-
-    Bytes.blit_string prelude 0 raw 0 (String.length prelude) ;
-
-    let digest_stack ?(relaxed = false) f l =
-      let rec go = function
-        | [] -> ()
-        | [ `Spaces x ] -> f (Some (if relaxed then " " else x))
-        | `CRLF :: r ->
-            f (Some "\r\n") ;
-            go r
-        | `Spaces x :: r ->
-            if not relaxed then f (Some x) ;
-            go r in
-      go (List.rev l) in
-    let rec go stack =
-      match Dkim.Body.decode decoder with
-      | `Await -> (
-          Log.debug (fun m -> m "Await input for the email body.") ;
-          stream () >>= function
-          | None ->
-              Dkim.Body.src decoder Bytes.empty 0 0 ;
-              go stack
-          | Some str ->
+      | `Malformed _ -> `Invalid_email
+      | `End prelude -> (
+          let from =
+            let ( let* ) = Result.bind in
+            let* { Emile.domain = domain, _; _ } = extract_from fields in
+            emile_domain_to_domain_name domain in
+          let ctx =
+            let fn = function
+              | SPF (_, _, { Uspf.Extract.ctx; _ }) -> Some ctx
+              | _ -> None in
+            let ctxs = List.filter_map fn fields in
+            let fn = function
+              | None -> Fun.const None
+              | Some ctx0 -> Uspf.merge ctx0 in
+            let ctx =
+              match ctxs with
+              | [] -> None
+              | ctx :: ctxs -> List.fold_left fn (Some ctx) ctxs in
+            match (ctx, t.ctx) with
+            | Some ctx, None -> Ok ctx
+            | _, Some ctx -> Ok ctx
+            | _ -> Error `Missing_SPF_context in
+          match (from, ctx) with
+          | Error err, _ | _, Error err -> err
+          | Ok domain, Ok ctx ->
+              let spf = SPF.eval (Uspf.get_and_check ctx) in
               let raw =
-                sanitize_input newline
-                  (Bytes.unsafe_of_string str)
-                  (String.length str) in
-              Dkim.Body.src decoder (Bytes.of_string raw) 0 (String.length raw) ;
-              go stack)
-      | `End ->
-          Log.debug (fun m -> m "Body of the email extracted.") ;
-          crlf relaxed 1 ;
-          crlf simple 1 ;
-          relaxed None ;
-          simple None ;
-          return ()
-      | `Spaces _ as x -> go (x :: stack)
-      | `CRLF -> go (`CRLF :: stack)
+                {
+                  spf
+                ; ctx
+                ; response = None
+                ; prelude
+                ; domain
+                ; dmarc = Ask_dmarc
+                ; fields
+                ; others = []
+                ; dkims = []
+                } in
+              let state = Queries (raw, [], []) in
+              decode { t with state })
+      | `Await ->
+          let state = Extraction (decoder, fields) in
+          let rem = src_rem t in
+          let input_pos = t.input_pos + rem in
+          let t = { t with state; input_pos } in
+          `Await t in
+    go fields
+
+  and queries t raw dkims preempted =
+    match (raw.dmarc, raw.spf, raw.response) with
+    | Ask_dmarc, _, None ->
+        let dn = Domain_name.prepend_label_exn raw.domain "_dmarc" in
+        let t = { t with state = Queries (raw, dkims, preempted) } in
+        `Query (t, dn, Dns.Rr_map.(K Txt))
+    | Ask_organization, _, None -> (
+        match organization_domain ~domain:raw.domain with
+        | None -> `DMARC_unreachable
+        | Some dn ->
+            let dn = Domain_name.prepend_label_exn dn "_dmarc" in
+            let t = { t with state = Queries (raw, dkims, preempted) } in
+            `Query (t, dn, Dns.Rr_map.(K Txt)))
+    | ((Ask_dmarc | Ask_organization) as s), _, Some (Response (r', v)) -> (
+        match (s, r', v) with
+        | Ask_dmarc, Dns.Rr_map.Txt, Error _ ->
+            let raw = { raw with response = None } in
+            let raw = { raw with dmarc = Ask_organization } in
+            queries t raw dkims preempted
+        | _, Dns.Rr_map.Txt, Ok (_ttl, txts) -> (
+            let str = String.concat "" (Dns.Rr_map.Txt_set.elements txts) in
+            match Result.bind (Decoder.parse_record str) of_map with
+            | Ok dmarc ->
+                let fn = function
+                  | From (fn, v, _) -> Either.Left (fn, v)
+                  | SPF (fn, v, _) -> Either.Left (fn, v)
+                  | Field (fn, v) -> Either.Left (fn, v)
+                  | DKIM (fn, v, dkim) -> Either.Right (fn, v, dkim) in
+                let fields = raw.fields in
+                let others, dkims' = List.partition_map fn fields in
+                let raw = { raw with fields = []; others; dkims = dkims' } in
+                let raw = { raw with response = None } in
+                let raw = { raw with dmarc = DMARC dmarc } in
+                queries t raw dkims preempted
+            | Error err -> err)
+        | _ -> `Unexpected_response (Dns.Rr_map.K r'))
+    | DMARC dmarc, SPF.SPF_result spf, None -> (
+        match raw.dkims with
+        | [] ->
+            let prelude = Bytes.unsafe_of_string raw.prelude in
+            let fn { field_name; value; dkim; domain_key } =
+              let v = (field_name, value, dkim, domain_key) in
+              let fields, Dkim.Digest.Value value =
+                Dkim.Digest.digest_fields raw.others v in
+              Ctx (fields, value) in
+            let ctxs = List.map fn dkims in
+            let decoder = Dkim.Body.decoder () in
+            let info = { spf; ctx = raw.ctx; dmarc; domain = raw.domain } in
+            if Bytes.length prelude > 0
+            then Dkim.Body.src decoder prelude 0 (Bytes.length prelude) ;
+            let state = Body (decoder, ctxs, preempted, info) in
+            decode { t with state }
+        | (field_name, value, dkim) :: rest ->
+        (* TODO(dinosaure): expire? *)
+        match Dkim.Verify.domain_key dkim with
+        | Ok dn ->
+            let t = { t with state = Queries (raw, dkims, preempted) } in
+            `Query (t, dn, Dns.Rr_map.(K Txt))
+        | Error _ ->
+            let error =
+              DKIM.Permerror
+                { dkim; field_name; value; error = `Invalid_domain_key } in
+            let preempted = error :: preempted in
+            let raw = { raw with dkims = rest } in
+            queries t raw dkims preempted)
+    | _, SPF.SPF_result _, Some resp -> (
+        match (raw.dkims, resp) with
+        | ( (field_name, value, dkim) :: rest
+          , Response (Dns.Rr_map.Txt, Ok (_ttl, txts)) ) -> (
+            let txts = Dns.Rr_map.Txt_set.elements txts in
+            let txts =
+              List.map (String.concat "" % String.split_on_char ' ') txts in
+            let txts = String.concat "" txts in
+            match Dkim.domain_key_of_string txts with
+            | Ok dk ->
+                let dkim = { field_name; value; dkim; domain_key = dk } in
+                let dkims = dkim :: dkims in
+                let raw = { raw with dkims = rest } in
+                let raw = { raw with response = None } in
+                queries t raw dkims preempted
+            | Error _ ->
+                let error =
+                  DKIM.Permerror
+                    { dkim; field_name; value; error = `Invalid_domain_key }
+                in
+                let preempted = error :: preempted in
+                let raw = { raw with dkims = rest } in
+                let raw = { raw with response = None } in
+                queries t raw dkims preempted)
+        | (field_name, value, dkim) :: rest, Response (_, Error err) ->
+            let error =
+              match err with
+              | `No_data _ | `No_domain _ ->
+                  DKIM.Permerror
+                    { dkim; field_name; value; error = `Domain_key_unavailable }
+              | _ -> DKIM.Temperror { dkim } in
+            let preempted = error :: preempted in
+            let raw = { raw with dkims = rest } in
+            let raw = { raw with response = None } in
+            queries t raw dkims preempted
+        | (_fn, _unstrctrd, _dkim) :: _, Response (r, Ok _) ->
+            `Unexpected_response (Dns.Rr_map.K r)
+        | [], _ -> failwith "Unexpected empty DKIM list")
+    | _, SPF.SPF_query (dn, r, _), None ->
+        Log.debug (fun m -> m "SPF DNS query") ;
+        let t = { t with state = Queries (raw, dkims, preempted) } in
+        `Query (t, Domain_name.raw dn, Dns.Rr_map.K r)
+    | _, SPF.SPF_query (_dn, r, fn), Some (Response (r', v)) -> (
+        Log.debug (fun m -> m "SPF DNS query with response") ;
+        match Refl.equal r r' with
+        | Some Refl.Refl ->
+            let spf =
+              try SPF.eval (fn v)
+              with Uspf.Result result -> SPF.SPF_result result in
+            let raw = { raw with spf } in
+            let raw = { raw with response = None } in
+            queries t raw dkims preempted
+        | None -> `Unexpected_response (Dns.Rr_map.K r))
+
+  and digest t decoder ctxs preempted info =
+    let rec go stack results =
+      match Dkim.Body.decode decoder with
+      | (`Spaces _ | `CRLF) as x -> go (x :: stack) results
       | `Data x ->
-          digest_stack ~relaxed:true relaxed stack ;
-          relaxed (Some x) ;
-          digest_stack simple stack ;
-          simple (Some x) ;
-          go [] in
-    if String.length prelude > 0
-    then Dkim.Body.src decoder raw 0 (String.length prelude) ;
-    `Consume (go [])
+          let fn (Ctx (fields, value)) =
+            Ctx (fields, Dkim.Digest.digest_wsp (List.rev stack) value) in
+          let results = List.map fn results in
+          let fn (Ctx (fields, value)) =
+            Ctx (fields, Dkim.Digest.digest_str x value) in
+          let results = List.map fn results in
+          go [] results
+      | `Await ->
+          let fn (Ctx (fields, value)) =
+            Ctx (fields, Dkim.Digest.digest_wsp stack value) in
+          let results = List.map fn results in
+          let state = Body (decoder, results, preempted, info) in
+          let rem = src_rem t in
+          let input_pos = t.input_pos + rem in
+          `Await { t with state; input_pos }
+      | `End ->
+          let dkims = signatures ctxs in
+          let dkims = List.rev_append preempted dkims in
+          let check = DKIM.aligned ~dmarc:info.dmarc ~domain:info.domain in
+          let dmarc =
+            if
+              SPF.aligned ~dmarc:info.dmarc ~domain:info.domain info.ctx
+              && SPF.pass info.spf
+              || List.exists check dkims
+            then `Pass
+            else `Fail in
+          `Info (info, dkims, dmarc) in
+    go [] ctxs
 
-  module DKIM_DNS = struct
-    type backend = DKIM_scheduler.t
-    type t = DNS.t
+  and decode t =
+    match t.state with
+    | Extraction (decoder, fields) -> extract t decoder fields
+    | Queries (raw, dkims, preempted) -> queries t raw dkims preempted
+    | Body (decoder, ctxs, preempted, info) ->
+        digest t decoder ctxs preempted info
+end
 
-    let gettxtrrecord dns domain_name =
-      DNS.getrrecord dns Dns.Rr_map.Txt domain_name >>= function
-      | Ok (_ttl, vs) -> return (Ok (Dns.Rr_map.Txt_set.elements vs))
-      | Error (`Msg _ as msg) -> return (Error msg)
-      | Error (`No_data (domain_name, _soa)) ->
-          return (error_msgf "No data for %a" Domain_name.pp domain_name)
-      | Error (`No_domain (domain_name, _soa)) ->
-          return (error_msgf "%a not found" Domain_name.pp domain_name)
+module Encoder = struct
+  open Prettym
 
-    let gettxtrrecord dns domain_name =
-      DKIM_scheduler.inj (gettxtrrecord dns domain_name)
-  end
-
-  module SPF_DNS = struct
-    type backend = SPF_scheduler.t
-    type t = DNS.t
-    type error = DNS.error
-
-    let getrrecord dns record domain_name =
-      SPF_scheduler.inj (DNS.getrrecord dns record domain_name)
-  end
-
-  (* XXX(dinosaure): Step 2 of RFC7489, Section 6.6.2. *)
-  let extract_dmarc ~domain dns =
-    let dmarc_domain = Domain_name.prepend_label_exn domain "_dmarc" in
-    DNS.getrrecord dns Dns.Rr_map.Txt dmarc_domain >>= function
-    | Ok (_ttl, vs) ->
-        (* TODO(dinosaure): discard any TXT which does not start with v=DMARC1. *)
-        let str = String.concat "" (Dns.Rr_map.Txt_set.elements vs) in
-        return
-          (let ( >>= ) x f = Result.bind x f in
-           Decoder.parse_record str >>= dmarc_of_map)
-    | Error _ ->
-    match organization_domain ~domain with
-    | None -> return (Error `DMARC_unreachable)
-    | Some organization_domain -> (
-        let dmarc_domain =
-          Domain_name.prepend_label_exn organization_domain "_dmarc" in
-        DNS.getrrecord dns Dns.Rr_map.Txt dmarc_domain >>= function
-        | Ok (_ttl, vs) ->
-            let str = String.concat "" (Dns.Rr_map.Txt_set.elements vs) in
-            return
-              (let ( >>= ) x f = Result.bind x f in
-               Decoder.parse_record str >>= dmarc_of_map)
-        | Error _ -> return (Error `DMARC_unreachable))
-  (* TODO(dinosaure): check Section 6.6.3 to see how to get the DMARC policy.
-   * The DMARC policy can comes from the organizational domain instead of the
-   * domain given by RFC5322.From. *)
-
-  let verify_spf ~ctx dns =
-    Uspf.get ~ctx spf_scheduler dns (module SPF_DNS) |> SPF_scheduler.prj
-    >>= function
-    | Error (`Msg err) -> return (Error (ctx, err))
-    | Ok record ->
-        Uspf.check ~ctx spf_scheduler dns (module SPF_DNS) record
-        |> SPF_scheduler.prj
-        >>| fun res -> Ok (ctx, res)
-
-  let rec drain stream =
-    IO.pause () >>= fun () ->
-    Lwt_stream.get stream >>= function
-    | Some str ->
-        Log.debug (fun m -> m "Drain stream: %S." str) ;
-        drain stream
-    | None -> Lwt.return_unit
-
-  let verify ?newline ~ctx ~epoch dns flow =
-    extract_info ?newline flow >>? fun info ->
-    Log.debug (fun m -> m "DMARC info extracted.") ;
-    let q = Queue.create () in
-    let fields = List.map elt_to_field info.fields in
-    let f (dkim_field_name, dkim_field_value, dkim, simple, relaxed) =
-      let open DKIM_scheduler in
-      Dkim.extract_server dns dkim_scheduler (module DKIM_DNS) dkim
-      |> prj
-      >>| reword_error (fun _ -> `DKIM_record_unreachable dkim)
-      >>? fun n ->
-      Dkim.post_process_server n
-      |> return
-      >>| reword_error (fun _ -> `Invalid_DKIM_record (dkim, n))
-      >>? fun server ->
-      Log.debug (fun m -> m "Verify DKIM field.") ;
-      Dkim.verify dkim_scheduler ~epoch fields
-        (dkim_field_name, dkim_field_value)
-        ~simple:(fun () -> inj (Lwt_stream.get simple))
-        ~relaxed:(fun () -> inj (Lwt_stream.get relaxed))
-        dkim server
-      |> prj
-      >>= function
-      | true -> return (Ok (`Valid dkim))
-      | false -> return (Ok (`Invalid dkim)) in
-    let f ((_, _, _, simple, relaxed) as v) =
-      (* XXX(dinosaure): It's possible that [f] does not consume [simple]
-       * and [relaxed]. In that case, we must ensure to consume them to
-       * unlock concurrent processes. Then, we must consume then _via_
-       * [IO.join] to ensure that one does not lock the other. *)
-      f v >>= fun res ->
-      IO.join [ drain simple; drain relaxed ] >>= fun () -> Lwt.return res in
-    let s_emitter x = Queue.push (`S x) q in
-    let r_emitter x = Queue.push (`R x) q in
-    let make_streams acc = function
-      | DKIM (dkim_field_name, dkim_field_value, dkim) ->
-          let s, s_pusher = Lwt_stream.create_bounded 10 in
-          let r, r_pusher = Lwt_stream.create_bounded 10 in
-          ((dkim_field_name, dkim_field_value, dkim, s, r), (s_pusher, r_pusher))
-          :: acc
-      | _ -> acc in
-    let dkim_fields_with_streams = List.fold_left make_streams [] info.fields in
-    Log.debug (fun m ->
-        m "%d DKIM field(s) to verify." (List.length dkim_fields_with_streams)) ;
-    let dkim_fields_with_streams = List.rev dkim_fields_with_streams in
-    let dkim_fields, pushers = List.split dkim_fields_with_streams in
-    let s_pushers, r_pushers = List.split pushers in
-    let i_emmitter, i_pusher = Lwt_stream.create_bounded 10 in
-    let rec consume tmp =
-      Log.debug (fun m -> m "Consume.") ;
-      match Queue.pop q with
-      | `Await -> (
-          Log.debug (fun m -> m "Waiting input.") ;
-          Flow.input flow tmp 0 (Bytes.length tmp) >>= function
-          | 0 ->
-              Log.debug (fun m -> m "No more input.") ;
-              i_pusher#close ;
-              consume tmp
-          | len ->
-              Log.debug (fun m ->
-                  m "Fill the internal stream with a new chunk.") ;
-              i_pusher#push (Bytes.sub_string tmp 0 len) >>= fun () ->
-              consume tmp)
-      | `S (Some str) ->
-          Log.debug (fun m -> m "Simple %S." str) ;
-          IO.iter_p (fun v -> v#push str) s_pushers >>= fun () -> consume tmp
-      | `R (Some str) ->
-          Log.debug (fun m -> m "Relaxed %S." str) ;
-          IO.iter_p (fun v -> v#push str) r_pushers >>= fun () -> consume tmp
-      | `S None ->
-          List.iter (fun v -> v#close) s_pushers ;
-          if List.for_all (fun v -> v#closed) r_pushers
-          then (
-            Log.debug (fun m -> m "Terminate consumer.") ;
-            return ())
-          else consume tmp
-      | `R None ->
-          List.iter (fun v -> v#close) r_pushers ;
-          if List.for_all (fun v -> v#closed) s_pushers
-          then (
-            Log.debug (fun m -> m "Terminate consumer.") ;
-            return ())
-          else consume tmp
-      | exception Queue.Empty ->
-          Log.debug (fun m -> m "Queue is empty, retry.") ;
-          IO.pause () >>= fun () -> consume tmp in
-    let (`Consume th) =
-      extract_body ?newline ~prelude:info.prelude
-        (fun () ->
-          Queue.push `Await q ;
-          Log.debug (fun m -> m "Send `Await to the consumer.") ;
-          Lwt_stream.get i_emmitter)
-        ~simple:s_emitter ~relaxed:r_emitter in
-    let ( >|= ) x f = x >>= fun x -> return (f x) in
-    Lwt.all (* XXX(dinosaure): or [lift4]? *)
+  let spf ?receiver ppf info =
+    let domain ppf domain_name =
+      eval ppf [ char $ '@'; !!string ] (Domain_name.to_string domain_name)
+    in
+    let smtp ppf ctx =
+      match (Uspf.origin ctx, Uspf.domain ctx) with
+      | Some `HELO, Some v ->
+          eval ppf
+            [ fws; string $ "smtp.helo"; cut; char $ '='; cut; !!domain ]
+            v
+      | Some `MAILFROM, Some v ->
+          eval ppf
+            [ fws; string $ "smtp.mailfrom"; cut; char $ '='; cut; !!domain ]
+            v
+      | _ -> ppf in
+    eval ppf
       [
-        (th >|= fun () -> `Unit);
-        (consume (Bytes.create 0x1000) >|= fun () -> `Unit);
-        (extract_dmarc ~domain:info.domain dns >|= fun v -> `DMARC v);
-        (verify_spf ~ctx dns >|= fun v -> `SPF v);
-        (Lwt_list.map_p f dkim_fields >|= fun v -> `DKIM v);
+        tbox 1; string $ "spf"; cut; char $ '='; cut; !!Uspf.Encoder.result
+      ; spaces 1; !!(Uspf.Encoder.comment ~ctx:info.Verify.ctx ?receiver)
+      ; !!smtp; char $ ';'; close; new_line
       ]
-    >>= function
-    | [ `Unit; `Unit; `DMARC (Ok dmarc); `SPF spf; `DKIM dkims ] ->
-        Log.debug (fun m -> m "Got SPF result: %a." pp_spf_result spf) ;
-        let result = identifier_alignment_checks info ~dmarc ~spf ~dkims in
-        return (Ok result)
-    | [ `Unit; `Unit; `DMARC (Error err); _; _ ] -> return (Error err)
-    | _ -> assert false
+      info.spf info.spf info.ctx
+
+  let dkim ppf value =
+    let domain ppf domain_name =
+      eval ppf [ char $ '@'; !!string ] (Domain_name.to_string domain_name)
+    in
+    let domain ppf domain_name =
+      eval ppf
+        [ string $ "header.i"; cut; char $ '='; cut; !!domain ]
+        domain_name in
+    let selector ppf selector =
+      eval ppf
+        [ string $ "header.s"; cut; char $ '='; cut; !!string ]
+        (Domain_name.to_string selector) in
+    let b ppf dkim =
+      let b, _ = Dkim.signature_and_hash dkim in
+      let b = Base64.encode_exn b in
+      let max = Int.min 8 (String.length b) in
+      let b = String.sub b 0 max in
+      eval ppf [ string $ "header.b"; cut; char $ '='; cut; !!string ] b in
+    let result ppf = function
+      | DKIM.Pass _ -> string ppf "pass"
+      | DKIM.Fail _ -> string ppf "fail"
+      | DKIM.Temperror _ -> string ppf "temperror"
+      | DKIM.Permerror _ -> string ppf "permerror"
+      | _ -> assert false in
+    match value with
+    | DKIM.Pass { dkim; _ }
+    | DKIM.Fail { dkim; _ }
+    | DKIM.Temperror { dkim; _ }
+    | DKIM.Permerror { dkim; _ } ->
+        eval ppf
+          [
+            string $ "dkim"; cut; char $ '='; cut; !!result; spaces 1; !!domain
+          ; spaces 1; !!selector; spaces 1; !!b; char $ ';'; new_line
+          ]
+          value (Dkim.domain dkim) (Dkim.selector dkim) dkim
+    | Neutral _ ->
+        eval ppf
+          [
+            string $ "dkim"; cut; char $ '='; cut; !!result; char $ ';'
+          ; new_line
+          ]
+          value
+
+  let dmarc_comment ppf dmarc =
+    let policy ppf = function
+      | Value.None -> string ppf "NONE"
+      | Value.Quarantine -> string ppf "QUARANTINE"
+      | Value.Reject -> string ppf "REJECT" in
+    let p ppf (value, _) =
+      eval ppf [ string $ "p"; cut; char $ '='; !!policy ] value in
+    let sp ppf (_, value) =
+      eval ppf [ string $ "sp"; cut; char $ '='; !!policy ] value in
+    eval ppf
+      [ spaces 1; char $ '('; !!p; spaces 1; !!sp; char $ ')' ]
+      dmarc.policy dmarc.policy
+
+  let dmarc ppf (info, value) =
+    let result ppf = function
+      | `Pass -> string ppf "pass"
+      | `Fail -> string ppf "fail" in
+    let from ppf domain_name =
+      eval ppf
+        [ string $ "header.from"; cut; char $ '='; cut; !!string ]
+        (Domain_name.to_string domain_name) in
+    eval ppf
+      [
+        string $ "dmarc"; cut; char $ '='; cut; !!result; !!dmarc_comment
+      ; spaces 1; !!from; char $ ';'; new_line
+      ]
+      value info.Verify.dmarc info.Verify.domain
+
+  let domain_name ppf = function
+    | `Addr (Emile.IPv4 v) -> eval ppf [ !!string ] (Ipaddr.V4.to_string v)
+    | `Addr (Emile.IPv6 v) -> eval ppf [ !!string ] (Ipaddr.V6.to_string v)
+    | `Addr (Emile.Ext (k, v)) ->
+        eval ppf [ char $ '['; !!string; char $ ':'; !!string; char $ ']' ] k v
+    | `Domain vs ->
+        let sep = ((fun ppf () -> string ppf "."), ()) in
+        eval ppf [ !!(list ~sep string) ] vs
+    | `Literal v -> eval ppf [ char $ '['; !!string; char $ ']' ] v
+
+  let field ~receiver ppf (info, dkims, value) =
+    let sep = ((fun ppf () -> eval ppf [ cut ]), ()) in
+    eval ppf
+      [
+        tbox 1; !!domain_name; char $ ';'; new_line; !!(spf ~receiver)
+      ; !!(list ~sep dkim); !!dmarc; close; new_line
+      ]
+      receiver info dkims (info, value)
+end
+
+let field_authentication_results = Mrmime.Field_name.v "Authentication-Results"
+
+let to_field ~receiver result =
+  let v = Prettym.to_string (Encoder.field ~receiver) result in
+  let _, v = Result.get_ok (Unstrctrd.of_string v) in
+  (field_authentication_results, v)
+
+module Authentication_results = struct
+  module Decoder = struct
+    open Angstrom
+
+    let is_white = function ' ' | '\t' -> true | _ -> false
+    let is_digit = function '0' .. '9' -> true | _ -> false
+
+    let ldh_str =
+      take_while1 (function
+        | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '-' -> true
+        | _ -> false)
+      >>= fun ldh ->
+      if ldh.[String.length ldh - 1] = '-'
+      then fail "invalid ldh-str"
+      else return ldh
+
+    let keyword = ldh_str
+
+    (* From Mr. MIME *)
+
+    let is_tspecials = function
+      | '(' | ')' | '<' | '>' | '@' | ',' | ';' | ':' | '\\' | '"' | '/' | '['
+      | ']' | '?' | '=' ->
+          true
+      | _ -> false
+
+    let is_ctl = function '\000' .. '\031' | '\127' -> true | _ -> false
+    let is_space = ( = ) ' '
+    let is_ascii = function '\000' .. '\127' -> true | _ -> false
+
+    let is_token c =
+      is_ascii c
+      && (not (is_tspecials c))
+      && (not (is_ctl c))
+      && not (is_space c)
+
+    let token = take_while1 is_token
+    let _3 x y z = (x, y, z)
+    let _4 a b c d = (a, b, c, d)
+    let ( .![]<- ) = Bytes.set
+    let utf_8_tail = satisfy @@ function '\x80' .. '\xbf' -> true | _ -> false
+
+    let utf_8_0 =
+      satisfy (function '\xc2' .. '\xdf' -> true | _ -> false) >>= fun b0 ->
+      utf_8_tail >>= fun b1 ->
+      let res = Bytes.create 2 in
+      res.![0] <- b0 ;
+      res.![1] <- b1 ;
+      return (Bytes.unsafe_to_string res)
+
+    let utf_8_1 =
+      lift3 _3 (char '\xe0')
+        (satisfy @@ function '\xa0' .. '\xbf' -> true | _ -> false)
+        utf_8_tail
+      <|> lift3 _3
+            (satisfy @@ function '\xe1' .. '\xec' -> true | _ -> false)
+            utf_8_tail utf_8_tail
+      <|> lift3 _3 (char '\xed')
+            (satisfy @@ function '\x80' .. '\x9f' -> true | _ -> false)
+            utf_8_tail
+      <|> lift3 _3
+            (satisfy @@ function '\xee' .. '\xef' -> true | _ -> false)
+            utf_8_tail utf_8_tail
+
+    let utf_8_1 =
+      utf_8_1 >>= fun (b0, b1, b2) ->
+      let res = Bytes.create 3 in
+      res.![0] <- b0 ;
+      res.![1] <- b1 ;
+      res.![2] <- b2 ;
+      return (Bytes.unsafe_to_string res)
+
+    let utf_8_2 =
+      lift4 _4 (char '\xf0')
+        (satisfy @@ function '\x90' .. '\xbf' -> true | _ -> false)
+        utf_8_tail utf_8_tail
+      <|> lift4 _4
+            (satisfy @@ function '\xf1' .. '\xf3' -> true | _ -> false)
+            utf_8_tail utf_8_tail utf_8_tail
+      <|> lift4 _4 (char '\xf4')
+            (satisfy @@ function '\x80' .. '\x8f' -> true | _ -> false)
+            utf_8_tail utf_8_tail
+
+    let utf_8_2 =
+      utf_8_2 >>= fun (b0, b1, b2, b3) ->
+      let res = Bytes.create 4 in
+      res.![0] <- b0 ;
+      res.![1] <- b1 ;
+      res.![2] <- b2 ;
+      res.![3] <- b3 ;
+      return (Bytes.unsafe_to_string res)
+
+    let utf_8_and is =
+      satisfy is >>| String.make 1 <|> utf_8_0 <|> utf_8_1 <|> utf_8_2
+
+    let of_escaped_character = function
+      | '\x61' -> '\x07' (* "\a" *)
+      | '\x62' -> '\x08' (* "\b" *)
+      | '\x74' -> '\x09' (* "\t" *)
+      | '\x6E' -> '\x0A' (* "\n" *)
+      | '\x76' -> '\x0B' (* "\v" *)
+      | '\x66' -> '\x0C' (* "\f" *)
+      | '\x72' -> '\x0D' (* "\r" *)
+      | c -> c
+
+    let quoted_pair =
+      char '\\' *> any_char >>| of_escaped_character >>| String.make 1
+
+    let is_obs_no_ws_ctl = function
+      | '\001' .. '\008' | '\011' | '\012' | '\014' .. '\031' | '\127' -> true
+      | _ -> false
+
+    let is_qtext = function
+      | '\033' | '\035' .. '\091' | '\093' .. '\126' -> true
+      | c -> is_obs_no_ws_ctl c
+
+    let is_wsp = function ' ' | '\t' -> true | _ -> false
+
+    let quoted_string =
+      char '"'
+      *> many
+           (quoted_pair
+           <|> utf_8_and is_qtext
+           <|> (satisfy is_wsp >>| String.make 1))
+      <* char '"'
+      >>| String.concat ""
+
+    let value =
+      quoted_string >>| (fun v -> `String v) <|> (token >>| fun v -> `Token v)
+
+    (* End of Mr. MIME's value decoder *)
+
+    let ignore_spaces = skip_while is_white
+    let crlf = string "\r\n"
+
+    let no_result =
+      ignore_spaces *> char ';' *> ignore_spaces *> string "none"
+      >>| fun _none -> `None
+
+    let authres_version = take_while1 is_digit
+    let authserv_id = value
+
+    let method_ =
+      keyword >>= fun m ->
+      let version = ignore_spaces *> char '/' *> take_while1 is_digit in
+      option None (version >>| Option.some) >>| fun version -> (m, version)
+
+    let result = keyword
+
+    let methodspec =
+      ignore_spaces *> method_ >>= fun m ->
+      ignore_spaces *> char '=' *> ignore_spaces *> result >>| fun r -> (m, r)
+
+    let reasonspec =
+      string "reason" *> ignore_spaces *> char '=' *> ignore_spaces *> value
+
+    let ptype = keyword
+    let property = string "mailfrom" <|> string "rcptto" <|> keyword
+
+    let mailbox =
+      let local_part =
+        option None (Emile.Parser.local_part >>| Option.some)
+        <* option () (char '@' >>| fun _ -> ()) in
+      let domain_name = Dkim.Decoder.domain_name >>| fun v -> `Domain v in
+      option None local_part >>= fun local_part ->
+      domain_name >>| fun domain_name -> `Mailbox (local_part, domain_name)
+
+    let pvalue =
+      let value = value >>| fun v -> `Value v in
+      ignore_spaces *> (mailbox <|> value) <* ignore_spaces
+
+    let propspec =
+      ptype >>= fun t ->
+      ignore_spaces *> char '.' *> ignore_spaces *> property >>= fun p ->
+      ignore_spaces *> char '=' *> pvalue >>| fun value -> (t, p, value)
+
+    let resinfo =
+      ignore_spaces *> char ';' *> methodspec >>= fun m ->
+      option None (ignore_spaces *> reasonspec >>| Option.some)
+      >>= fun reason ->
+      option [] (ignore_spaces *> many1 propspec) >>= fun properties ->
+      return (m, reason, properties)
+
+    let _authres_payload =
+      ignore_spaces *> authserv_id >>= fun id ->
+      option None (ignore_spaces *> authres_version >>| Option.some)
+      >>= fun version ->
+      no_result <|> (many1 resinfo >>| fun lst -> `Result lst)
+      >>= fun results -> ignore_spaces *> crlf *> return (id, version, results)
+  end
 end
