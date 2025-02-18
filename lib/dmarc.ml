@@ -955,7 +955,16 @@ module Authentication_results = struct
 
     let is_white = function ' ' | '\t' -> true | _ -> false
     let is_digit = function '0' .. '9' -> true | _ -> false
-    let ldh_str = Emile.Parser.ldh_str
+
+    let ldh_str =
+      take_while1 (function
+        | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '-' -> true
+        | _ -> false)
+      >>= fun ldh ->
+      if ldh.[String.length ldh - 1] = '-'
+      then fail "invalid ldh-str"
+      else return ldh
+
     let keyword = ldh_str
     let value = Mrmime.Content_type.Decoder.value
     let ignore_spaces = skip_while is_white
