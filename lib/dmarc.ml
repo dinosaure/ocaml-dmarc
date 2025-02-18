@@ -966,7 +966,121 @@ module Authentication_results = struct
       else return ldh
 
     let keyword = ldh_str
-    let value = Mrmime.Content_type.Decoder.value
+
+    (* From Mr. MIME *)
+
+    let is_tspecials = function
+      | '(' | ')' | '<' | '>' | '@' | ',' | ';' | ':' | '\\' | '"' | '/' | '[' | ']'
+      | '?' | '=' ->
+          true
+      | _ -> false
+    
+    let is_ctl = function '\000' .. '\031' | '\127' -> true | _ -> false
+    let is_space = ( = ) ' '
+    let is_ascii = function '\000' .. '\127' -> true | _ -> false
+    
+    let is_token c =
+      is_ascii c && (not (is_tspecials c)) && (not (is_ctl c)) && not (is_space c)
+
+
+
+    let token = take_while1 is_token
+
+    let _3 x y z = (x, y, z)
+    let _4 a b c d = (a, b, c, d)
+    let ( .![]<- ) = Bytes.set
+    let utf_8_tail = satisfy @@ function '\x80' .. '\xbf' -> true | _ -> false
+  
+    let utf_8_0 =
+      satisfy (function '\xc2' .. '\xdf' -> true | _ -> false) >>= fun b0 ->
+      utf_8_tail >>= fun b1 ->
+      let res = Bytes.create 2 in
+      res.![0] <- b0;
+      res.![1] <- b1;
+      return (Bytes.unsafe_to_string res)
+  
+    let utf_8_1 =
+      lift3 _3 (char '\xe0')
+        (satisfy @@ function '\xa0' .. '\xbf' -> true | _ -> false)
+        utf_8_tail
+      <|> lift3 _3
+            (satisfy @@ function '\xe1' .. '\xec' -> true | _ -> false)
+            utf_8_tail utf_8_tail
+      <|> lift3 _3 (char '\xed')
+            (satisfy @@ function '\x80' .. '\x9f' -> true | _ -> false)
+            utf_8_tail
+      <|> lift3 _3
+            (satisfy @@ function '\xee' .. '\xef' -> true | _ -> false)
+            utf_8_tail utf_8_tail
+  
+    let utf_8_1 =
+      utf_8_1 >>= fun (b0, b1, b2) ->
+      let res = Bytes.create 3 in
+      res.![0] <- b0;
+      res.![1] <- b1;
+      res.![2] <- b2;
+      return (Bytes.unsafe_to_string res)
+  
+    let utf_8_2 =
+      lift4 _4 (char '\xf0')
+        (satisfy @@ function '\x90' .. '\xbf' -> true | _ -> false)
+        utf_8_tail utf_8_tail
+      <|> lift4 _4
+            (satisfy @@ function '\xf1' .. '\xf3' -> true | _ -> false)
+            utf_8_tail utf_8_tail utf_8_tail
+      <|> lift4 _4 (char '\xf4')
+            (satisfy @@ function '\x80' .. '\x8f' -> true | _ -> false)
+            utf_8_tail utf_8_tail
+  
+    let utf_8_2 =
+      utf_8_2 >>= fun (b0, b1, b2, b3) ->
+      let res = Bytes.create 4 in
+      res.![0] <- b0;
+      res.![1] <- b1;
+      res.![2] <- b2;
+      res.![3] <- b3;
+      return (Bytes.unsafe_to_string res)
+  
+    let utf_8_and is =
+      satisfy is >>| String.make 1 <|> utf_8_0 <|> utf_8_1 <|> utf_8_2
+
+    let of_escaped_character = function
+      | '\x61' -> '\x07' (* "\a" *)
+      | '\x62' -> '\x08' (* "\b" *)
+      | '\x74' -> '\x09' (* "\t" *)
+      | '\x6E' -> '\x0A' (* "\n" *)
+      | '\x76' -> '\x0B' (* "\v" *)
+      | '\x66' -> '\x0C' (* "\f" *)
+      | '\x72' -> '\x0D' (* "\r" *)
+      | c -> c
+
+    let quoted_pair =
+      char '\\' *> any_char >>| of_escaped_character >>| String.make 1
+
+    let is_obs_no_ws_ctl = function
+      | '\001' .. '\008' | '\011' | '\012' | '\014' .. '\031' | '\127' -> true
+      | _ -> false
+
+    let is_qtext = function
+      | '\033' | '\035' .. '\091' | '\093' .. '\126' -> true
+      | c -> is_obs_no_ws_ctl c
+
+    let is_wsp = function ' ' | '\t' -> true | _ -> false
+
+    let quoted_string =
+      char '"'
+      *> many
+           (quoted_pair
+           <|> utf_8_and is_qtext
+           <|> (satisfy is_wsp >>| String.make 1))
+      <* char '"'
+      >>| String.concat ""
+
+    let value =
+      quoted_string >>| (fun v -> `String v) <|> (token >>| fun v -> `Token v)
+
+    (* End of Mr. MIME's value decoder *)
+
     let ignore_spaces = skip_while is_white
     let crlf = string "\r\n"
 
