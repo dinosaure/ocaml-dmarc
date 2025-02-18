@@ -27,6 +27,6 @@ build: [
 ]
 dev-repo: "git+https://github.com/dinosaure/ocaml-dmarc.git"
 pin-depends: [
-  [ "uspf.dev" "git+https://github.com/mirage/uspf.git#dcf7657e6d1edd483e5c1b147e1416332fafb69f" ]
-  [ "dkim.dev" "git+https://github.com/mirage/ocaml-dkim.git#2baebc2ec0ab3356bb14eebda8682b1971daaa70" ]
+  [ "uspf.dev" "git+https://github.com/mirage/uspf.git#8e829f5dd624d0c05f57e8970d98230ec049fb50" ]
+  [ "dkim.dev" "git+https://github.com/mirage/ocaml-dkim.git#0219f01db7f77926150311a97ca2cf7901de948c" ]
 ]
