@@ -54,10 +54,18 @@ module Verify : sig
   val response : decoder -> 'a Dns.Rr_map.key -> 'a Uspf.response -> decoder
 end
 
+module Encoder : sig
+  val field :
+       receiver:Emile.domain
+    -> (Verify.info * DKIM.t list * [ `Pass | `Fail ]) Prettym.t
+end
+
 val to_field :
      receiver:Emile.domain
   -> Verify.info * DKIM.t list * [ `Pass | `Fail ]
   -> Mrmime.Field_name.t * Unstrctrd.t
+
+val field_authentication_results : Mrmime.Field_name.t
 
 val organization_domain :
   domain:_ Domain_name.t -> [ `raw ] Domain_name.t option
