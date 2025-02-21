@@ -69,3 +69,25 @@ val field_authentication_results : Mrmime.Field_name.t
 
 val organization_domain :
   domain:_ Domain_name.t -> [ `raw ] Domain_name.t option
+
+module Authentication_results : sig
+  type property = {
+      ty : string
+    ; property : string
+    ; value :
+        [ `Value of string | `Mailbox of string list option * Emile.domain ]
+  }
+
+  type result = {
+      meth : string
+    ; version : int option
+    ; value : string
+    ; reason : string option
+    ; properties : property list
+  }
+
+  type t = { servid : string; version : int option; results : result list }
+
+  val of_unstrctrd : Unstrctrd.t -> (t, [> `Msg of string ]) Stdlib.result
+  val to_unstrctrd : t -> Unstrctrd.t
+end
