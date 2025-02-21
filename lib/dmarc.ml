@@ -1,6 +1,7 @@
 [@@@warning "-30"]
 
 let reword_error f = function Ok v -> Ok v | Error err -> Error (f err)
+let error_msgf fmt = Fmt.kstr (fun msg -> Error (`Msg msg)) fmt
 let ( % ) f g = fun x -> f (g x)
 let invalid_argf fmt = Fmt.kstr invalid_arg fmt
 let src = Logs.Src.create "dmarc"
@@ -900,9 +901,9 @@ module Encoder = struct
       | Value.Quarantine -> string ppf "QUARANTINE"
       | Value.Reject -> string ppf "REJECT" in
     let p ppf (value, _) =
-      eval ppf [ string $ "p"; cut; char $ '='; !!policy ] value in
+      eval ppf [ string $ "p"; cut; char $ '='; cut; !!policy ] value in
     let sp ppf (_, value) =
-      eval ppf [ string $ "sp"; cut; char $ '='; !!policy ] value in
+      eval ppf [ string $ "sp"; cut; char $ '='; cut; !!policy ] value in
     eval ppf
       [ spaces 1; char $ '('; !!p; spaces 1; !!sp; char $ ')' ]
       dmarc.policy dmarc.policy
@@ -918,7 +919,7 @@ module Encoder = struct
     eval ppf
       [
         string $ "dmarc"; cut; char $ '='; cut; !!result; !!dmarc_comment
-      ; spaces 1; !!from; char $ ';'; new_line
+      ; spaces 1; !!from; 
       ]
       value info.Verify.dmarc info.Verify.domain
 
@@ -950,6 +951,23 @@ let to_field ~receiver result =
   (field_authentication_results, v)
 
 module Authentication_results = struct
+  type property = {
+      ty : string
+    ; property : string
+    ; value :
+        [ `Value of string | `Mailbox of string list option * Emile.domain ]
+  }
+
+  type result = {
+      meth : string
+    ; version : int option
+    ; value : string
+    ; reason : string option
+    ; properties : property list
+  }
+
+  type t = { servid : string; version : int option; results : result list }
+
   module Decoder = struct
     open Angstrom
 
@@ -1082,24 +1100,24 @@ module Authentication_results = struct
     (* End of Mr. MIME's value decoder *)
 
     let ignore_spaces = skip_while is_white
-    let crlf = string "\r\n"
 
     let no_result =
       ignore_spaces *> char ';' *> ignore_spaces *> string "none"
       >>| fun _none -> `None
 
     let authres_version = take_while1 is_digit
-    let authserv_id = value
+    let authserv_id = value >>| function `String str | `Token str -> str
 
-    let method_ =
+    let meth =
       keyword >>= fun m ->
       let version = ignore_spaces *> char '/' *> take_while1 is_digit in
-      option None (version >>| Option.some) >>| fun version -> (m, version)
+      option None (version >>| Option.some) >>| fun version ->
+      (m, Option.map int_of_string version)
 
     let result = keyword
 
     let methodspec =
-      ignore_spaces *> method_ >>= fun m ->
+      ignore_spaces *> meth >>= fun m ->
       ignore_spaces *> char '=' *> ignore_spaces *> result >>| fun r -> (m, r)
 
     let reasonspec =
@@ -1108,35 +1126,159 @@ module Authentication_results = struct
     let ptype = keyword
     let property = string "mailfrom" <|> string "rcptto" <|> keyword
 
+    (* From Emile *)
+
+    let uchar_is_ascii x = Uchar.to_int x >= 0 && Uchar.to_int x <= 0x7f
+
+    let with_uutf is =
+      let decoder = Uutf.decoder ~encoding:`UTF_8 `Manual in
+      let buf = Buffer.create 0x100 in
+      let rec go byte_count =
+        match Uutf.decode decoder with
+        | `Await -> `Continue
+        | `Malformed _ -> `Error "Invalid UTF-8 character"
+        | `Uchar uchar when uchar_is_ascii uchar ->
+            if is (Uchar.to_char uchar)
+            then (
+              Uutf.Buffer.add_utf_8 buf uchar ;
+              go byte_count)
+            else `End (Uutf.decoder_byte_count decoder - byte_count - 1)
+        | `Uchar uchar ->
+            Uutf.Buffer.add_utf_8 buf uchar ;
+            go byte_count
+        | `End -> `End (Uutf.decoder_byte_count decoder - byte_count) in
+      let scan buf ~off ~len =
+        let src = Bigstringaf.substring buf ~off ~len in
+        Uutf.Manual.src decoder (Bytes.unsafe_of_string src) 0 len ;
+        go (Uutf.decoder_byte_count decoder) in
+      fix @@ fun m ->
+      available >>= fun len ->
+      Unsafe.peek len scan >>= function
+      | `Error err -> fail err
+      | `Continue -> advance len >>= fun () -> m
+      | `End len -> advance len >>= fun () -> return (Buffer.contents buf)
+
+    let with_uutf1 is =
+      available >>= fun n ->
+      if n > 0
+      then
+        with_uutf is >>= fun s ->
+        if String.length s > 0 then return s else fail "with_uutf1"
+      else fail "with_uutf1"
+
+    let local_part =
+      (* NOTE(dinosaure): it's like [Emile.Parser.local_part] but without [CFWS]. *)
+      let atom = Emile.Parser.(with_uutf1 is_atext) in
+      let word = atom <|> Emile.Parser.quoted_string in
+      let obs_local_part = sep_by1 (char '.') word in
+      let dot_atom = sep_by1 (char '.') atom in
+      let quoted_string = Emile.Parser.quoted_string >>| fun str -> [ str ] in
+      obs_local_part <|> dot_atom <|> quoted_string >>= fun lst ->
+      let len = List.fold_left (fun a x -> a + String.length x) 0 lst in
+      if len > 0 then return lst else fail "local-part empty"
+
+    (* End of Emile's local-part decoder *)
+
     let mailbox =
       let local_part =
-        option None (Emile.Parser.local_part >>| Option.some)
+        option None (local_part >>| Option.some)
         <* option () (char '@' >>| fun _ -> ()) in
       let domain_name = Dkim.Decoder.domain_name >>| fun v -> `Domain v in
       option None local_part >>= fun local_part ->
       domain_name >>| fun domain_name -> `Mailbox (local_part, domain_name)
 
     let pvalue =
-      let value = value >>| fun v -> `Value v in
+      let value = value >>| function `String v | `Token v -> `Value v in
       ignore_spaces *> (mailbox <|> value) <* ignore_spaces
 
     let propspec =
-      ptype >>= fun t ->
-      ignore_spaces *> char '.' *> ignore_spaces *> property >>= fun p ->
-      ignore_spaces *> char '=' *> pvalue >>| fun value -> (t, p, value)
+      ptype >>= fun ty ->
+      ignore_spaces *> char '.' *> ignore_spaces *> property >>= fun property ->
+      ignore_spaces *> char '=' >>= fun _ ->
+      pvalue >>| fun value -> { ty; property; value }
 
     let resinfo =
-      ignore_spaces *> char ';' *> methodspec >>= fun m ->
+      ignore_spaces *> char ';' *> methodspec
+      >>= fun ((meth, version), value) ->
       option None (ignore_spaces *> reasonspec >>| Option.some)
       >>= fun reason ->
+      let reason =
+        match reason with
+        | Some (`String str | `Token str) -> Some str
+        | None -> None in
       option [] (ignore_spaces *> many1 propspec) >>= fun properties ->
-      return (m, reason, properties)
+      return { meth; version; value; reason; properties }
 
-    let _authres_payload =
-      ignore_spaces *> authserv_id >>= fun id ->
+    let authres_payload =
+      ignore_spaces *> authserv_id >>= fun servid ->
       option None (ignore_spaces *> authres_version >>| Option.some)
       >>= fun version ->
-      no_result <|> (many1 resinfo >>| fun lst -> `Result lst)
-      >>= fun results -> ignore_spaces *> crlf *> return (id, version, results)
+      no_result <|> (many1 resinfo >>| fun lst -> `Results lst)
+      >>= fun results ->
+      ignore_spaces
+      *>
+      let version = Option.map int_of_string version in
+      let results =
+        match results with `None -> [] | `Results results -> results in
+      return { servid; version; results }
   end
+
+  module Encoder = struct
+    open Prettym
+
+    let version ppf = function
+      | None -> ppf
+      | Some v -> eval ppf [ char $ '/'; !!string ] (string_of_int v)
+
+    let reason ppf = function
+      | None -> ppf
+      | Some reason ->
+          eval ppf
+            [ spaces 1; string $ "reason"; cut; char $ '='; cut; !!string ]
+            reason
+
+    let value ppf = function
+      | `Value str -> string ppf str
+      | `Mailbox _ -> assert false (* TODO(dinosaure): flemme *)
+
+    let property ppf t =
+      eval ppf
+        [ !!string; char $ '.'; !!string; cut; char $ '='; cut; !!value ]
+        t.ty t.property t.value
+
+    let result ppf t =
+      let sep = ((fun ppf () -> eval ppf [ spaces 1 ]), ()) in
+      eval ppf
+        [
+          char $ ';'; cut; !!string; !!version; cut; char $ '='; cut; !!string
+        ; !!reason; spaces 1; !!(list ~sep property)
+        ]
+        t.meth t.version t.value t.reason t.properties
+
+    let encoder ppf t =
+      let sep = ((fun ppf () -> eval ppf [ cut ]), ()) in
+      eval ppf
+        [
+          tbox 1; !!string; !!version; char $ ';'; !!(list ~sep result); close
+        ; new_line
+        ]
+        t.servid t.version t.results
+  end
+
+  let of_unstrctrd unstrctrd =
+    let ( let* ) = Result.bind in
+    let v = Unstrctrd.fold_fws unstrctrd in
+    let* v = Unstrctrd.without_comments v in
+    let str = Unstrctrd.to_utf_8_string v in
+    let* v =
+      match Angstrom.parse_string ~consume:All Decoder.authres_payload str with
+      | Ok _ as results -> results
+      | Error _ -> error_msgf "Invalid Authentication-Results value" in
+    Ok v
+
+  let to_unstrctrd t =
+    let str = Prettym.to_string ~new_line:"\r\n" Encoder.encoder t in
+    let v = Unstrctrd.of_string str in
+    let _, value = Result.get_ok v in
+    value
 end
