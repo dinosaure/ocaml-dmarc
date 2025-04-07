@@ -526,7 +526,7 @@ module Verify = struct
     | `Info of info * DKIM.t list * [ `Pass | `Fail ]
     | error ]
 
-  and ctx = Ctx : string * 'k Dkim.Digest.value -> ctx
+  and ctx = Ctx : { bh : string; b : 'k Dkim.Digest.value } -> ctx
 
   and dkim = {
       field_name : Mrmime.Field_name.t
@@ -576,9 +576,10 @@ module Verify = struct
   let src_rem decoder = decoder.input_len - decoder.input_pos + 1
 
   let signatures ctxs =
-    let fn (Ctx (fields, ((dkim, dk, _) as value))) =
-      let body, fields = Dkim.Digest.verify ~fields value in
-      DKIM.from_signature { DKIM.dkim; domain_key = dk; fields; body } in
+    let fn (Ctx { bh; b = (dkim, dk, _) as value }) =
+      let b, bh = Dkim.Digest.verify ~fields:bh value in
+      DKIM.from_signature { DKIM.dkim; domain_key = dk; fields = bh; body = b }
+    in
     List.map fn ctxs
 
   let rec extract t decoder fields =
@@ -707,9 +708,9 @@ module Verify = struct
             let prelude = Bytes.unsafe_of_string raw.prelude in
             let fn { field_name; value; dkim; domain_key } =
               let v = (field_name, value, dkim, domain_key) in
-              let fields, Dkim.Digest.Value value =
+              let bh, Dkim.Digest.Value b =
                 Dkim.Digest.digest_fields raw.others v in
-              Ctx (fields, value) in
+              Ctx { bh; b } in
             let ctxs = List.map fn dkims in
             let decoder = Dkim.Body.decoder () in
             let info = { spf; ctx = raw.ctx; dmarc; domain = raw.domain } in
@@ -789,16 +790,15 @@ module Verify = struct
       match Dkim.Body.decode decoder with
       | (`Spaces _ | `CRLF) as x -> go (x :: stack) results
       | `Data x ->
-          let fn (Ctx (fields, value)) =
-            Ctx (fields, Dkim.Digest.digest_wsp (List.rev stack) value) in
+          let fn (Ctx { bh; b }) =
+            Ctx { bh; b = Dkim.Digest.digest_wsp (List.rev stack) b } in
           let results = List.map fn results in
-          let fn (Ctx (fields, value)) =
-            Ctx (fields, Dkim.Digest.digest_str x value) in
+          let fn (Ctx { bh; b }) = Ctx { bh; b = Dkim.Digest.digest_str x b } in
           let results = List.map fn results in
           go [] results
       | `Await ->
-          let fn (Ctx (fields, value)) =
-            Ctx (fields, Dkim.Digest.digest_wsp stack value) in
+          let fn (Ctx { bh; b }) =
+            Ctx { bh; b = Dkim.Digest.digest_wsp stack b } in
           let results = List.map fn results in
           let state = Body (decoder, results, preempted, info) in
           let rem = src_rem t in
@@ -919,7 +919,7 @@ module Encoder = struct
     eval ppf
       [
         string $ "dmarc"; cut; char $ '='; cut; !!result; !!dmarc_comment
-      ; spaces 1; !!from; 
+      ; spaces 1; !!from
       ]
       value info.Verify.dmarc info.Verify.domain
 
@@ -987,9 +987,12 @@ module Authentication_results = struct
 
     (* From Mr. MIME *)
 
+    (* NOTE(dinosaure): about tspecials, I see some emails which includes the "/" character
+       into values. *)
+
     let is_tspecials = function
-      | '(' | ')' | '<' | '>' | '@' | ',' | ';' | ':' | '\\' | '"' | '/' | '['
-      | ']' | '?' | '=' ->
+      | '(' | ')' | '<' | '>' | '@' | ',' | ';' | ':' | '\\' | '"' (* | '/' *)
+      | '[' | ']' | '?' | '=' ->
           true
       | _ -> false
 
@@ -1124,7 +1127,7 @@ module Authentication_results = struct
       string "reason" *> ignore_spaces *> char '=' *> ignore_spaces *> value
 
     let ptype = keyword
-    let property = string "mailfrom" <|> string "rcptto" <|> keyword
+    let property = (* string "mailfrom" <|> string "rcptto" <|> *) keyword
 
     (* From Emile *)
 
@@ -1187,13 +1190,28 @@ module Authentication_results = struct
       option None local_part >>= fun local_part ->
       domain_name >>| fun domain_name -> `Mailbox (local_part, domain_name)
 
+    (* NOTE(dinosaure): this is an extension of [mailbox] which allows a mailbox
+       to be surrounded by '<' & '>'. It allows multiple domains but... we don't
+       care. We found such email address into some Authentication-Results values. *)
+    let mailbox =
+      let extension =
+        Emile.Parser.angle_addr
+        >>| fun { Emile.local; domain = domain, _; _ } ->
+        let fn = function `Atom str | `String str -> str in
+        let local = List.map fn local in
+        `Mailbox (Some local, domain) in
+      mailbox <|> extension
+
     let pvalue =
       let value = value >>| function `String v | `Token v -> `Value v in
       ignore_spaces *> (mailbox <|> value) <* ignore_spaces
 
     let propspec =
       ptype >>= fun ty ->
-      ignore_spaces *> char '.' *> ignore_spaces *> property >>= fun property ->
+      (* NOTE(dinosaure): the RFC says that the property is required but some mails don't have it.
+         We must accept nullable properties... *)
+      option "" (ignore_spaces *> char '.' *> ignore_spaces *> property)
+      >>= fun property ->
       ignore_spaces *> char '=' >>= fun _ ->
       pvalue >>| fun value -> { ty; property; value }
 
@@ -1209,12 +1227,41 @@ module Authentication_results = struct
       option [] (ignore_spaces *> many1 propspec) >>= fun properties ->
       return { meth; version; value; reason; properties }
 
+    (* NOTE(dinosaure): some emails don't put the verification method and write
+       only some properties... So we handle this case but we ignore it. *)
+    let invalid_resinfo =
+      ignore_spaces *> char ';' *> ignore_spaces *> many1 propspec >>= fun _ ->
+      return None
+
+    let resinfo = resinfo >>| Option.some
+    let resinfo = resinfo <|> invalid_resinfo >>| fun info -> `Info info
+
+    let end_of_phrase =
+      ignore_spaces *> char ';' *> ignore_spaces *> end_of_input >>| fun () ->
+      `End_of_phrase
+
+    let end_of_input = ignore_spaces *> end_of_input >>| fun () -> `End_of_input
+
+    (* NOTE(dinosaure): this is needed because some emails want to terminate an
+       Authentication-Results with [;]. *)
+    let resinfos =
+      fix @@ fun m ->
+      resinfo <|> end_of_phrase <|> end_of_input >>= function
+      | `Info (Some x) -> m >>| fun r -> x :: r
+      | `Info None -> m
+      | `End_of_phrase -> return []
+      | `End_of_input -> return []
+
+    let resinfos =
+      resinfo >>= function
+      | `Info (Some x) -> resinfos >>| fun r -> x :: r
+      | `Info None -> resinfos
+
     let authres_payload =
       ignore_spaces *> authserv_id >>= fun servid ->
       option None (ignore_spaces *> authres_version >>| Option.some)
       >>= fun version ->
-      no_result <|> (many1 resinfo >>| fun lst -> `Results lst)
-      >>= fun results ->
+      no_result <|> (resinfos >>| fun lst -> `Results lst) >>= fun results ->
       ignore_spaces
       *>
       let version = Option.map int_of_string version in
@@ -1270,11 +1317,9 @@ module Authentication_results = struct
     let v = Unstrctrd.fold_fws unstrctrd in
     let* v = Unstrctrd.without_comments v in
     let str = Unstrctrd.to_utf_8_string v in
-    let* v =
-      match Angstrom.parse_string ~consume:All Decoder.authres_payload str with
-      | Ok _ as results -> results
-      | Error _ -> error_msgf "Invalid Authentication-Results value" in
-    Ok v
+    match Angstrom.parse_string ~consume:All Decoder.authres_payload str with
+    | Ok _ as results -> results
+    | Error _ -> error_msgf "Invalid Authentication-Results value"
 
   let to_unstrctrd t =
     let str = Prettym.to_string ~new_line:"\r\n" Encoder.encoder t in

@@ -88,6 +88,10 @@ module Authentication_results : sig
 
   type t = { servid : string; version : int option; results : result list }
 
+  module Decoder : sig
+    val authres_payload : t Angstrom.t
+  end
+
   val of_unstrctrd : Unstrctrd.t -> (t, [> `Msg of string ]) Stdlib.result
   val to_unstrctrd : t -> Unstrctrd.t
 end
