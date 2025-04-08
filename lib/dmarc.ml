@@ -518,7 +518,12 @@ module Verify = struct
   and state =
     | Extraction of Mrmime.Hd.decoder * field list
     | Queries of raw * dkim list * DKIM.t list
-    | Body of Dkim.Body.decoder * ctx list * DKIM.t list * info
+    | Body of
+        Dkim.Body.decoder
+        * [ `CRLF | `Spaces of string ] list
+        * ctx list
+        * DKIM.t list
+        * info
 
   and decode =
     [ `Await of decoder
@@ -558,7 +563,7 @@ module Verify = struct
     | Extraction (v, _) ->
         Mrmime.Hd.src v src idx len ;
         if len == 0 then end_of_input decoder else decoder
-    | Body (v, _, _, _) ->
+    | Body (v, _, _, _, _) ->
         Dkim.Body.src v input idx len ;
         if len == 0 then end_of_input decoder else decoder
     | Queries _ -> if len == 0 then end_of_input decoder else decoder
@@ -716,7 +721,7 @@ module Verify = struct
             let info = { spf; ctx = raw.ctx; dmarc; domain = raw.domain } in
             if Bytes.length prelude > 0
             then Dkim.Body.src decoder prelude 0 (Bytes.length prelude) ;
-            let state = Body (decoder, ctxs, preempted, info) in
+            let state = Body (decoder, [], ctxs, preempted, info) in
             decode { t with state }
         | (field_name, value, dkim) :: rest ->
         (* TODO(dinosaure): expire? *)
@@ -785,7 +790,7 @@ module Verify = struct
             queries t raw dkims preempted
         | None -> `Unexpected_response (Dns.Rr_map.K r))
 
-  and digest t decoder ctxs preempted info =
+  and digest t decoder stack ctxs preempted info =
     let rec go stack results =
       match Dkim.Body.decode decoder with
       | (`Spaces _ | `CRLF) as x -> go (x :: stack) results
@@ -797,15 +802,18 @@ module Verify = struct
           let results = List.map fn results in
           go [] results
       | `Await ->
-          let fn (Ctx { bh; b }) =
+          (* let fn (Ctx { bh; b }) =
             Ctx { bh; b = Dkim.Digest.digest_wsp stack b } in
-          let results = List.map fn results in
-          let state = Body (decoder, results, preempted, info) in
+          let results = List.map fn results in *)
+          let state = Body (decoder, stack, results, preempted, info) in
           let rem = src_rem t in
           let input_pos = t.input_pos + rem in
           `Await { t with state; input_pos }
       | `End ->
-          let dkims = signatures ctxs in
+          let fn (Ctx { bh; b }) =
+            Ctx { bh; b = Dkim.Digest.digest_wsp [ `CRLF ] b } in
+          let results = List.map fn results in
+          let dkims = signatures results in
           let dkims = List.rev_append preempted dkims in
           let check = DKIM.aligned ~dmarc:info.dmarc ~domain:info.domain in
           let dmarc =
@@ -816,14 +824,14 @@ module Verify = struct
             then `Pass
             else `Fail in
           `Info (info, dkims, dmarc) in
-    go [] ctxs
+    go stack ctxs
 
   and decode t =
     match t.state with
     | Extraction (decoder, fields) -> extract t decoder fields
     | Queries (raw, dkims, preempted) -> queries t raw dkims preempted
-    | Body (decoder, ctxs, preempted, info) ->
-        digest t decoder ctxs preempted info
+    | Body (decoder, stack, ctxs, preempted, info) ->
+        digest t decoder stack ctxs preempted info
 end
 
 module Encoder = struct
@@ -1319,7 +1327,10 @@ module Authentication_results = struct
     let str = Unstrctrd.to_utf_8_string v in
     match Angstrom.parse_string ~consume:All Decoder.authres_payload str with
     | Ok _ as results -> results
-    | Error _ -> error_msgf "Invalid Authentication-Results value"
+    | Error _ ->
+        Log.debug (fun m -> m "Invalid Authentication-Results value:") ;
+        Log.debug (fun m -> m "%s" str) ;
+        error_msgf "Invalid Authentication-Results value"
 
   let to_unstrctrd t =
     let str = Prettym.to_string ~new_line:"\r\n" Encoder.encoder t in
