@@ -141,7 +141,7 @@ let run _quiet newline input =
         go decoder in
   go decoder
 
-let () = run true `LF None
+let () = run true `CRLF None
 
 (*
 open Cmdliner
