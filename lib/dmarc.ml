@@ -444,7 +444,8 @@ module DKIM = struct
 
   let from_signature { dkim; domain_key; fields; body = bh } =
     let pass =
-      let _, Dkim.Hash_value (k, bh') = Dkim.signature_and_hash dkim in
+      let _, Dkim.Hash_value (k, bh') =
+        (Dkim.signature_and_hash dkim :> string * Dkim.hash_value) in
       let bh' = Digestif.to_raw_string k bh' in
       fields && Eqaf.equal bh bh' in
     if pass then Pass { dkim; domain_key } else Fail { dkim; domain_key }
@@ -879,8 +880,8 @@ module Encoder = struct
       eval ppf
         [ string $ "header.s"; cut; char $ '='; cut; !!string ]
         (Domain_name.to_string selector) in
-    let b ppf dkim =
-      let b, _ = Dkim.signature_and_hash dkim in
+    let b ppf (dkim : Dkim.signed Dkim.t) =
+      let b, _ = (Dkim.signature_and_hash dkim :> string * Dkim.hash_value) in
       let b = Base64.encode_exn b in
       let max = Int.min 8 (String.length b) in
       let b = String.sub b 0 max in
@@ -948,14 +949,17 @@ module Encoder = struct
         eval ppf [ !!(list ~sep string) ] vs
     | `Literal v -> eval ppf [ char $ '['; !!string; char $ ']' ] v
 
-  let field ~receiver ppf (info, dkims, value) =
+  let value ~receiver ppf (info, dkims, value) =
     let sep = ((fun ppf () -> eval ppf [ cut ]), ()) in
     eval ppf
       [
-        tbox 1; !!domain_name; char $ ';'; new_line; !!(spf ~receiver)
-      ; !!(list ~sep dkim); !!dmarc; close; new_line
+        !!domain_name; char $ ';'; fws; !!(spf ~receiver); fws
+      ; !!(list ~sep dkim); !!dmarc
       ]
       receiver info dkims (info, value)
+
+  let field ~receiver ppf results =
+    eval ppf [ tbox 1; !!(value ~receiver); close; new_line ] results
 end
 
 let field_authentication_results = Mrmime.Field_name.v "Authentication-Results"
