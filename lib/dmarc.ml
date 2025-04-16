@@ -531,7 +531,13 @@ module Verify = struct
     | `Info of info * DKIM.t list * [ `Pass | `Fail ]
     | error ]
 
-  and ctx = Ctx : { bh : string; b : 'k Dkim.Digest.value } -> ctx
+  and ctx =
+    | Ctx : {
+          bh : string
+        ; b : (Dkim.signed, 'k) Dkim.Digest.value
+        ; dk : Dkim.domain_key
+      }
+        -> ctx
 
   and dkim = {
       field_name : Mrmime.Field_name.t
@@ -581,8 +587,8 @@ module Verify = struct
   let src_rem decoder = decoder.input_len - decoder.input_pos + 1
 
   let signatures ctxs =
-    let fn (Ctx { bh; b = (dkim, dk, _) as value }) =
-      let b, bh = Dkim.Digest.verify ~fields:bh value in
+    let fn (Ctx { bh; b = (dkim, _) as value; dk }) =
+      let b, bh = Dkim.Digest.verify ~fields:bh ~domain_key:dk value in
       DKIM.from_signature { DKIM.dkim; domain_key = dk; fields = bh; body = b }
     in
     List.map fn ctxs
@@ -715,7 +721,7 @@ module Verify = struct
               let v = (field_name, value, dkim, domain_key) in
               let bh, Dkim.Digest.Value b =
                 Dkim.Digest.digest_fields raw.others v in
-              Ctx { bh; b } in
+              Ctx { bh; b; dk = domain_key } in
             let ctxs = List.map fn dkims in
             let decoder = Dkim.Body.decoder () in
             let info = { spf; ctx = raw.ctx; dmarc; domain = raw.domain } in
@@ -795,10 +801,11 @@ module Verify = struct
       match Dkim.Body.decode decoder with
       | (`Spaces _ | `CRLF) as x -> go (x :: stack) results
       | `Data x ->
-          let fn (Ctx { bh; b }) =
-            Ctx { bh; b = Dkim.Digest.digest_wsp (List.rev stack) b } in
+          let fn (Ctx { bh; b; dk }) =
+            Ctx { bh; b = Dkim.Digest.digest_wsp (List.rev stack) b; dk } in
           let results = List.map fn results in
-          let fn (Ctx { bh; b }) = Ctx { bh; b = Dkim.Digest.digest_str x b } in
+          let fn (Ctx { bh; b; dk }) =
+            Ctx { bh; b = Dkim.Digest.digest_str x b; dk } in
           let results = List.map fn results in
           go [] results
       | `Await ->
@@ -810,8 +817,8 @@ module Verify = struct
           let input_pos = t.input_pos + rem in
           `Await { t with state; input_pos }
       | `End ->
-          let fn (Ctx { bh; b }) =
-            Ctx { bh; b = Dkim.Digest.digest_wsp [ `CRLF ] b } in
+          let fn (Ctx { bh; b; dk }) =
+            Ctx { bh; b = Dkim.Digest.digest_wsp [ `CRLF ] b; dk } in
           let results = List.map fn results in
           let dkims = signatures results in
           let dkims = List.rev_append preempted dkims in
