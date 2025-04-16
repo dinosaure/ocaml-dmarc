@@ -55,6 +55,10 @@ module Verify : sig
 end
 
 module Encoder : sig
+  val value :
+       receiver:Emile.domain
+    -> (Verify.info * DKIM.t list * [ `Pass | `Fail ]) Prettym.t
+
   val field :
        receiver:Emile.domain
     -> (Verify.info * DKIM.t list * [ `Pass | `Fail ]) Prettym.t
