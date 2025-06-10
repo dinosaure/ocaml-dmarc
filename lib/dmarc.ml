@@ -1308,9 +1308,12 @@ module Authentication_results = struct
       | `Mailbox _ -> assert false (* TODO(dinosaure): flemme *)
 
     let property ppf t =
-      eval ppf
-        [ !!string; char $ '.'; !!string; cut; char $ '='; cut; !!value ]
-        t.ty t.property t.value
+      match t.property with
+      | "" -> eval ppf [ !!string; cut; char $ '='; cut; !!value ] t.ty t.value
+      | property ->
+          eval ppf
+            [ !!string; char $ '.'; !!string; cut; char $ '='; cut; !!value ]
+            t.ty property t.value
 
     let result ppf t =
       let sep = ((fun ppf () -> eval ppf [ spaces 1 ]), ()) in
@@ -1348,4 +1351,72 @@ module Authentication_results = struct
     let v = Unstrctrd.of_string str in
     let _, value = Result.get_ok v in
     value
+
+  let of_verification ~receiver (info, dkims, result) =
+    let servid =
+      match receiver with
+      | `Addr (Emile.IPv4 v) -> Ipaddr.V4.to_string v
+      | `Addr (Emile.IPv6 v) -> Ipaddr.V6.to_string v
+      | `Addr (Emile.Ext (k, v)) -> Fmt.str "[%s:%s]" k v
+      | `Domain vs -> String.concat "." vs
+      | `Literal v -> Fmt.str "[%s]" v in
+    let spf =
+      let value = Prettym.to_string Uspf.Encoder.result info.Verify.spf in
+      let properties =
+        match (Uspf.origin info.Verify.ctx, Uspf.domain info.Verify.ctx) with
+        | Some `HELO, Some v ->
+            let value = `Value (Domain_name.to_string v) in
+            [ { ty = "smtp"; property = "helo"; value } ]
+        | Some `MAILFROM, Some v ->
+            let value = `Value (Domain_name.to_string v) in
+            [ { ty = "smtp"; property = "mailfrom"; value } ]
+        | _ -> [] in
+      { meth = "spf"; version = None; value; reason = None; properties } in
+    let dkims =
+      let fn dkim =
+        let value =
+          match dkim with
+          | DKIM.Pass _ -> "pass"
+          | Fail _ -> "fail"
+          | Temperror _ -> "temperror"
+          | Permerror _ -> "permerror"
+          | Neutral _ -> "neutral" in
+        let properties =
+          match dkim with
+          | Neutral _ -> []
+          | Pass { dkim; _ }
+          | Fail { dkim; _ }
+          | Temperror { dkim; _ }
+          | Permerror { dkim; _ } ->
+              let selector = Dkim.selector dkim in
+              let selector = Domain_name.to_string selector in
+              let selector =
+                { ty = "header"; property = "s"; value = `Value selector } in
+              let domain = Dkim.domain dkim in
+              let domain = `Domain (Domain_name.to_strings domain) in
+              let domain =
+                {
+                  ty = "header"
+                ; property = "i"
+                ; value = `Mailbox (None, domain)
+                } in
+              let b, _ =
+                (Dkim.signature_and_hash dkim :> string * Dkim.hash_value) in
+              let b = Base64.encode_exn b in
+              let b = String.sub b 0 (Int.min 8 (String.length b)) in
+              let b = { ty = "header"; property = "b"; value = `Value b } in
+              [ selector; domain; b ] in
+        { meth = "dkim"; version = None; reason = None; value; properties }
+      in
+      List.map fn dkims in
+    let dmarc =
+      let value = match result with `Pass -> "pass" | `Fail -> "fail" in
+      let properties =
+        let value = `Value (Domain_name.to_string info.Verify.domain) in
+        [ { ty = "header"; property = "from"; value } ] in
+      { meth = "dmarc"; version = None; reason = None; value; properties } in
+    let results = [ spf ] in
+    let results = List.rev_append results dkims in
+    let results = List.rev_append results [ dmarc ] in
+    { servid; version = None; results }
 end

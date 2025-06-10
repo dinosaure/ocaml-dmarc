@@ -98,4 +98,7 @@ module Authentication_results : sig
 
   val of_unstrctrd : Unstrctrd.t -> (t, [> `Msg of string ]) Stdlib.result
   val to_unstrctrd : t -> Unstrctrd.t
+
+  val of_verification :
+    receiver:Emile.domain -> Verify.info * DKIM.t list * [ `Pass | `Fail ] -> t
 end
