@@ -11,7 +11,7 @@ bug-reports: "https://github.com/dinosaure/ocaml-dmarc/issues"
 depends: [
   "ocaml" {>= "4.08.0"}
   "domain-name"
-  "ocurl"
+  "curl"
   "dune" {>= "2.9.0"}
   "alcotest" {>= "1.4.0" & with-test}
 ]
