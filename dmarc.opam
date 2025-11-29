@@ -11,8 +11,8 @@ bug-reports: "https://github.com/dinosaure/ocaml-dmarc/issues"
 depends: [
   "ocaml" {>= "4.08.0"}
   "mrmime" {>= "0.5.0"}
-  "uspf"
-  "dkim"
+  "uspf" {>= "0.2.0"}
+  "dkim" {>= "0.9.0"}
   "public-suffix"
   "logs" {>= "0.7.0"}
   "dune" {>= "2.9.0"}
@@ -26,7 +26,4 @@ build: [
   ["dune" "runtest" "-p" name "-j" jobs] {with-test}
 ]
 dev-repo: "git+https://github.com/dinosaure/ocaml-dmarc.git"
-pin-depends: [
-  [ "uspf.dev" "git+https://github.com/mirage/uspf.git#8e829f5dd624d0c05f57e8970d98230ec049fb50" ]
-  [ "dkim.dev" "git+https://github.com/mirage/ocaml-dkim.git#4752aa45a3bfa21df0ab2cf0a2daa15552454d53" ]
-]
+x-maintenance-intent: [ "(latest)" ]
