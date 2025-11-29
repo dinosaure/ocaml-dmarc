@@ -21,3 +21,4 @@ build: [
   ["dune" "runtest" "-p" name "-j" jobs] {with-test}
 ]
 dev-repo: "git+https://github.com/dinosaure/ocaml-dmarc.git"
+x-maintenance-intent: [ "(latest)" ]
