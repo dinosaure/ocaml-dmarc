@@ -1,5 +1,7 @@
 (executable
  (name download)
+ (enabled_if
+  (= %{context_name} promote))
  (modules download)
  (libraries curl))
 
@@ -10,6 +12,8 @@
 
 (rule
  (target public_suffix_list.dat)
+ (enabled_if
+  (= %{context_name} promote))
  (mode promote)
  (action
   (run ./download.exe)))
