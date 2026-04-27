@@ -26,4 +26,6 @@ let anon_args str = default_filename := str
 let () =
   try Arg.parse args anon_args usage ;
       run !default_uri !default_filename
-  with exn -> Format.eprintf "%s: %s\n%!" Sys.argv.(0) (Printexc.to_string exn)
+  with
+    | Curl.CurlException (code, _, _) -> Format.eprintf "%s: %s\n%!" Sys.argv.(0) (Curl.strerror code)
+    | exn -> Format.eprintf "%s: %s\n%!" Sys.argv.(0) (Printexc.to_string exn)
