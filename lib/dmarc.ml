@@ -8,213 +8,28 @@ let src = Logs.Src.create "dmarc"
 
 module Log = (val Logs.src_log src : Logs.LOG)
 
-type t = {
-    dkim_alignment : Value.mode
-  ; spf_alignment : Value.mode
-  ; failure_reporting : [ `_0 | `_1 | `D | `S ]
-  ; policy : Value.policy * Value.policy
-  ; percentage : Value.percent
-  ; interval : Value.interval
-  ; formats : string * string list
-  ; feedbacks : Value.uri list
-  ; failures : Value.uri list
-}
+type policy = Value.policy
+type mode = Value.mode
+type psd = Value.psd
+type fo = Value.fo
 
-let pp_fo ppf = function
-  | `_0 -> Fmt.string ppf "0"
-  | `_1 -> Fmt.string ppf "1"
-  | `D -> Fmt.string ppf "d"
-  | `S -> Fmt.string ppf "s"
+let pp_policy = Value.pp_policy
 
-let pp ppf dmarc =
-  Fmt.pf ppf
-    "{ @[<hov>adkim= %a;@ aspf= %a;@ fo= %a;@ p= %a;@ sp= %a;@ pct= %a%%;@ ri= \
-     %a;@ rfmt= @[<hov>%a@];@ rua= @[<hov>%a@];@ ruf= @[<hov>%a@];@] }"
-    Value.pp_mode dmarc.dkim_alignment Value.pp_mode dmarc.spf_alignment pp_fo
-    dmarc.failure_reporting Value.pp_policy (fst dmarc.policy) Value.pp_policy
-    (snd dmarc.policy) Value.pp_percent dmarc.percentage Value.pp_interval
-    dmarc.interval
-    Fmt.(Dump.list string)
-    (fst dmarc.formats :: snd dmarc.formats)
-    Fmt.(Dump.list Value.pp_uri)
-    dmarc.feedbacks
-    Fmt.(Dump.list Value.pp_uri)
-    dmarc.failures
+module Record = struct
+  include Record
 
-let of_map map =
-  let dkim_alignment =
-    Option.value ~default:Value.Relaxed Value.(find K.adkim map) in
-  let spf_alignment =
-    Option.value ~default:Value.Relaxed Value.(find K.aspf map) in
-  let failure_reporting = Option.value ~default:`_0 Value.(find K.fo map) in
-  let percentage = Option.value ~default:100 Value.(find K.pct map) in
-  let interval = Option.value ~default:86400 Value.(find K.ri map) in
-  let formats =
-    match Value.(find K.rf map) with None -> ("afrf", []) | Some v -> v in
-  let feedbacks = Option.value ~default:[] Value.(find K.rua map) in
-  let failures = Option.value ~default:[] Value.(find K.ruf map) in
-  match (Value.(find K.p map), Value.(find K.sp map)) with
-  | Some (("quarantine" | "reject" | "none") as v), None ->
-      let v = Value.policy_of_string v in
-      Ok
-        {
-          dkim_alignment
-        ; spf_alignment
-        ; failure_reporting
-        ; policy = (v, v)
-        ; percentage
-        ; interval
-        ; formats
-        ; feedbacks
-        ; failures
-        }
-  | ( Some (("quarantine" | "reject" | "none") as v)
-    , Some (("quarantine" | "reject" | "none") as v') ) ->
-      let v = Value.policy_of_string v in
-      let v' = Value.policy_of_string v' in
-      Ok
-        {
-          dkim_alignment
-        ; spf_alignment
-        ; failure_reporting
-        ; policy = (v, v')
-        ; percentage
-        ; interval
-        ; formats
-        ; feedbacks
-        ; failures
-        }
-  | None, _ -> Error `Missing_DMARC_policy
-  | Some v, _ ->
-  match feedbacks with
-  | _ :: _ ->
-      (* XXX(dinosaure): According to RFC 7489,
-       * If a retrieved policy record does not contain a valid "p" tag, or contains an "sp" tag
-       * that is not valid, then:
-       *
-       * 1. if a "rua" tag is present and contains at least one syntactically valid reporting URI,
-       *    the Mail Receiver SHOULD act as if a record containing a valid "v" tag and "p=none" was
-       *    retrieved, and continue processing; *)
-      Ok
-        {
-          dkim_alignment
-        ; spf_alignment
-        ; failure_reporting
-        ; policy = (Value.None, Value.None)
-        ; percentage
-        ; interval
-        ; formats
-        ; feedbacks
-        ; failures
-        }
-      (* 2. otherwise, the Mail Receiver applies no DMARC processing to this message. *)
-  | [] -> Error (`Invalid_DMARC_policy v)
+  let of_string str =
+    match of_string str with
+    | Ok _ as value -> value
+    | Error `Not_a_DMARC_record -> error_msgf "Invalid DMARC record: %S" str
+end
 
-module Decoder = struct
-  let ( or ) a b x = a x || b x
-  let is_alpha = function 'a' .. 'z' | 'A' .. 'Z' -> true | _ -> false
-  let is_digit = function '0' .. '9' -> true | _ -> false
-  let is_wsp = function ' ' | '\t' -> true | _ -> false
-  let is_dash = ( = ) '-'
+module Lookup = Lookup
 
-  open Angstrom
+let organizational_domain = Tree_walk.organizational_domain
 
-  (* XXX(dinosaure): According to RFC 5321, Keyword = Ldh-str. *)
-  let ldh_str =
-    take_while1 (is_alpha or is_digit or is_dash) >>= fun res ->
-    if String.get res (String.length res - 1) <> '-'
-    then return res
-    else fail "Invalid ldh-str token"
-
-  let keyword = ldh_str
-
-  let dmarc_uri =
-    take_while1 @@ function ',' | ';' | ' ' | '\t' -> false | _ -> true
-
-  let weight =
-    let ( * ) = Int64.mul in
-    take_while1 is_digit >>| Int64.of_string >>= fun n ->
-    peek_char >>= function
-    | Some 'k' -> advance 1 >>= fun () -> return (n * 1000L)
-    | Some 'm' -> advance 1 >>= fun () -> return (n * 1000L * 1000L)
-    | Some 'g' -> advance 1 >>= fun () -> return (n * 1000L * 1000L * 1000L)
-    | Some 't' ->
-        advance 1 >>= fun () -> return (n * 1000L * 1000L * 1000L * 1000L)
-    | _ -> return n
-
-  let dmarc_uri =
-    dmarc_uri >>| Uri.of_string >>= fun uri ->
-    peek_char >>= function
-    | Some '!' -> advance 1 *> weight >>= fun weight -> return (uri, Some weight)
-    | _ -> return (uri, None)
-
-  let binding ~key parser =
-    string key *> skip_while is_wsp *> char '=' *> skip_while is_wsp *> parser
-
-  let dmarc_rfmt =
-    let parser =
-      keyword >>= fun x ->
-      many (skip_while is_wsp *> char ':' *> keyword) >>= fun r ->
-      return (x :: r) in
-    binding ~key:"rf" parser
-
-  let dmarc_version = binding ~key:"v" (string "DMARC1")
-  let dmarc_sep = skip_while is_wsp *> char ';' *> skip_while is_wsp
-
-  let dmarc_request =
-    binding ~key:"p"
-      (choice [ string "none"; string "quarantine"; string "reject" ])
-
-  let dmarc_srequest =
-    binding ~key:"sp"
-      (choice [ string "none"; string "quarantine"; string "reject" ])
-
-  let dmarc_auri =
-    binding ~key:"rua"
-      ( dmarc_uri >>= fun x ->
-        many (skip_while is_wsp *> char ',' *> skip_while is_wsp *> dmarc_uri)
-        >>= fun r -> return (x :: r) )
-
-  let dmarc_furi =
-    binding ~key:"ruf"
-      ( dmarc_uri >>= fun x ->
-        many (skip_while is_wsp *> char ',' *> skip_while is_wsp *> dmarc_uri)
-        >>= fun r -> return (x :: r) )
-
-  let dmarc_adkim = binding ~key:"adkim" (choice [ string "r"; string "s" ])
-  let dmarc_aspf = binding ~key:"aspf" (choice [ string "r"; string "s" ])
-
-  let dmarc_ainterval =
-    binding ~key:"ri" (take_while1 is_digit >>| int_of_string)
-
-  let dmarc_fo =
-    binding ~key:"fo"
-      (choice [ string "0"; string "1"; string "d"; string "s" ])
-
-  let dmarc_percent = binding ~key:"pct" (take_while1 is_digit >>| int_of_string)
-
-  let dmarc_value =
-    dmarc_request
-    >>| (fun v -> `P v)
-    <|> (dmarc_srequest >>| fun v -> `SP v)
-    <|> (dmarc_auri >>| fun v -> `RUA v)
-    <|> (dmarc_furi >>| fun v -> `RUF v)
-    <|> (dmarc_adkim >>| fun v -> `ADKIM v)
-    <|> (dmarc_aspf >>| fun v -> `ASPF v)
-    <|> (dmarc_ainterval >>| fun v -> `RI v)
-    <|> (dmarc_fo >>| fun v -> `FO v)
-    <|> (dmarc_rfmt >>| fun v -> `RF v)
-    <|> (dmarc_percent >>| fun v -> `PCT v)
-
-  let dmarc_record =
-    dmarc_version >>= fun version ->
-    many (dmarc_sep *> dmarc_value) >>= fun values ->
-    option () dmarc_sep *> return (`V version :: values)
-
-  let parse_record str =
-    match Angstrom.parse_string ~consume:Prefix dmarc_record str with
-    | Ok v -> Ok (Value.values_to_map v)
-    | Error _ -> Error (`Invalid_DMARC str)
+module Report = struct
+  let destinations = Report.destinations
 end
 
 type field =
@@ -252,32 +67,21 @@ let parse_from_field_value unstrctrd =
   | Ok _ as v -> v
   | Error _ -> Error (`Invalid_From_field unstrctrd)
 
+(* See RFC 9989, Section 5.3.1. If zero or more than one domain is extracted
+   from the RFC5322.From header field, then DMARC validation is not possible. *)
 let extract_from fields =
-  let exception Multiple_from in
-  let res = ref None in
-  match
-    List.iter
-      (fun field ->
-        match (field, !res) with
-        | From (_, _, [ mailbox ]), None -> res := Some mailbox
-        | From _, _ ->
-            raise Multiple_from
-            (* XXX(dinosaure): According RFC 7489, Section 6.6.1,
-             * - Messages with multiples RFC5322.From fields are typically rejected
-             * - Messages bearing a single RFC5322.From field containing multiple
-             *   addresses are typically rejected *)
-        | _ -> ())
-      fields ;
-    !res
-  with
-  | Some mailbox -> Ok mailbox
-  | None ->
-      Error `Missing_From_field
-      (* - Messages that have no RFC5322.From field at all are typically rejected. *)
-  | exception Multiple_from -> Error `Multiple_mailboxes
-
-(* TODO(dinosaure): RFC7489 talks about "syntactically valid __multi-valued__ RFC5322.From" field
- * as a valid case to initiate DMARC verification. But I don't know the meaning of such case! *)
+  let fn = function From (_, _, mailboxes) -> Some mailboxes | _ -> None in
+  match List.filter_map fn fields with
+  | [] -> Error `Missing_From_field
+  | _ :: _ :: _ -> Error `Multiple_From_fields
+  | [ mailboxes ] -> (
+      let fn { Emile.domain = domain, _; _ } = domain in
+      match List.map fn mailboxes with
+      | [] -> Error `Missing_From_field
+      | domain :: domains ->
+          if List.for_all (Emile.equal_domain domain) domains
+          then Ok domain
+          else Error `Multiple_author_domains)
 
 let emile_domain_to_domain_name = function
   | ( `Addr (Emile.IPv4 _)
@@ -289,27 +93,6 @@ let emile_domain_to_domain_name = function
       reword_error
         (fun _ -> `Invalid_domain domain)
         (Domain_name.of_strings lst)
-
-(* XXX(dinosaure): See RFC 7489, 3.2. *)
-let rec organization_domain ~domain =
-  let open Organization_domains in
-  find ~domain organization_domains
-
-and find ~domain = function
-  | [] -> None
-  | x :: r ->
-  match Domain_name.is_subdomain ~subdomain:domain ~domain:x with
-  | false -> find ~domain r
-  | true -> (
-      let x_labels = Domain_name.count_labels x in
-      let domain_labels = Domain_name.count_labels domain in
-      let amount = domain_labels - x_labels - 1 in
-      if amount < 0
-      then find ~domain r
-      else
-        match Domain_name.drop_label ~amount domain with
-        | Ok v -> Some v
-        | Error _ -> find ~domain r)
 
 module SPF = struct
   type 'a t =
@@ -375,20 +158,6 @@ module SPF = struct
       | S_query (dn, r, fn) -> SPF_query (dn, r, fn)
       | S_result result -> SPF_result result
       | exception Uspf.Result result -> SPF_result result
-
-  let aligned ~dmarc ~domain ctx =
-    let spf_alignment = dmarc.spf_alignment in
-    match (spf_alignment, domain, Uspf.domain ctx) with
-    | Value.Strict, d, Some d' -> Domain_name.equal d d'
-    | Value.Relaxed, d, Some d' -> (
-        let d = organization_domain ~domain:d in
-        let d' = organization_domain ~domain:d' in
-        match (d, d') with
-        | Some a, Some b -> Domain_name.equal a b
-        | _ -> false)
-    | _, _, None -> false
-
-  let pass : Uspf.Result.t -> bool = function `Pass _ -> true | _ -> false
 end
 
 module Refl = struct
@@ -449,45 +218,51 @@ module DKIM = struct
       let bh' = Digestif.to_raw_string k bh' in
       fields && Eqaf.equal bh bh' in
     if pass then Pass { dkim; domain_key } else Fail { dkim; domain_key }
-
-  let aligned ~dmarc ~domain = function
-    | Pass { dkim; _ } -> (
-        let dkim_alignment = dmarc.dkim_alignment in
-        match (dkim_alignment, domain, Dkim.domain dkim) with
-        | Value.Strict, d, d' -> Domain_name.equal d d'
-        | Value.Relaxed, d, d' -> (
-            let d = organization_domain ~domain:d in
-            let d' = organization_domain ~domain:d' in
-            match (d, d') with
-            | Some a, Some b -> Domain_name.equal a b
-            | _ -> false))
-    | _ -> false
 end
 
 module Verify = struct
   type error =
-    [ `Invalid_DMARC of string
-    | `Invalid_DMARC_policy of string
-    | `Missing_DMARC_policy
-    | `Invalid_email
-    | `DMARC_unreachable
+    [ `Invalid_email
     | `Unexpected_response of Dns.Rr_map.k
     | `Invalid_domain of Emile.domain
     | `Missing_From_field
-    | `Missing_SPF_context
-    | `Multiple_mailboxes ]
+    | `Multiple_From_fields
+    | `Multiple_author_domains
+    | `Missing_SPF_context ]
 
   let pp_error ppf = function
-    | `Invalid_DMARC _ -> Fmt.string ppf "Invalid DMARC"
-    | `Invalid_DMARC_policy _ -> Fmt.string ppf "Invalid DMARC policy"
-    | `Missing_DMARC_policy -> Fmt.string ppf "Missing DMARC policy"
     | `Invalid_email -> Fmt.string ppf "Invalid email"
-    | `DMARC_unreachable -> Fmt.string ppf "DMARC unreachable"
     | `Unexpected_response _ -> Fmt.string ppf "Unexpected DNS response"
     | `Invalid_domain _ -> Fmt.string ppf "Invalid domain"
     | `Missing_From_field -> Fmt.string ppf "Missing From field"
+    | `Multiple_From_fields -> Fmt.string ppf "Multiple From fields"
+    | `Multiple_author_domains -> Fmt.string ppf "Multiple author domains"
     | `Missing_SPF_context -> Fmt.string ppf "Missing SPF context"
-    | `Multiple_mailboxes -> Fmt.string ppf "Multiple mailboxes"
+
+  type result = [ `Pass | `Fail | `None | `Temperror | `Permerror ]
+
+  let pp_result ppf = function
+    | `Pass -> Fmt.string ppf "pass"
+    | `Fail -> Fmt.string ppf "fail"
+    | `None -> Fmt.string ppf "none"
+    | `Temperror -> Fmt.string ppf "temperror"
+    | `Permerror -> Fmt.string ppf "permerror"
+
+  type policy = {
+      record : Record.t
+    ; domain : [ `raw ] Domain_name.t
+    ; assessment : Value.policy
+    ; applied : Value.policy
+  }
+
+  type info = {
+      domain : [ `raw ] Domain_name.t
+    ; spf : Uspf.Result.t
+    ; ctx : Uspf.ctx
+    ; dkims : DKIM.t list
+    ; policy : policy option
+    ; result : result
+  }
 
   type decoder = {
       input : bytes
@@ -503,17 +278,21 @@ module Verify = struct
     ; response : response option
     ; prelude : string
     ; domain : [ `raw ] Domain_name.t
-    ; dmarc : dmarc
-    ; fields : field list
     ; others : (Mrmime.Field_name.t * Unstrctrd.t) list
     ; dkims : (Mrmime.Field_name.t * Unstrctrd.t * Dkim.signed Dkim.t) list
   }
 
-  and info = {
-      spf : Uspf.Result.t
+  and partial = {
+      domain : [ `raw ] Domain_name.t
+    ; spf : Uspf.Result.t
     ; ctx : Uspf.ctx
-    ; dmarc : t
-    ; domain : [ `raw ] Domain_name.t
+  }
+
+  and inputs = {
+      domain : [ `raw ] Domain_name.t
+    ; spf : Uspf.Result.t
+    ; ctx : Uspf.ctx
+    ; dkims : DKIM.t list
   }
 
   and state =
@@ -524,12 +303,13 @@ module Verify = struct
         * [ `CRLF | `Spaces of string ] list
         * ctx list
         * DKIM.t list
-        * info
+        * partial
+    | Evaluation of inputs * Lookup.cache * response option
 
   and decode =
     [ `Await of decoder
     | `Query of decoder * [ `raw ] Domain_name.t * Dns.Rr_map.k
-    | `Info of info * DKIM.t list * [ `Pass | `Fail ]
+    | `Info of info
     | error ]
 
   and ctx =
@@ -548,7 +328,6 @@ module Verify = struct
   }
 
   and response = Response : 'a Uspf.record * 'a Uspf.response -> response
-  and dmarc = Ask_dmarc | Ask_organization | DMARC of t
 
   let decoder ?ctx () =
     let input, input_pos, input_len = (Bytes.empty, 1, 0) in
@@ -573,7 +352,8 @@ module Verify = struct
     | Body (v, _, _, _, _) ->
         Dkim.Body.src v input idx len ;
         if len == 0 then end_of_input decoder else decoder
-    | Queries _ -> if len == 0 then end_of_input decoder else decoder
+    | Queries _ | Evaluation _ ->
+        if len == 0 then end_of_input decoder else decoder
 
   let response : type a.
       decoder -> a Dns.Rr_map.key -> a Uspf.response -> decoder =
@@ -582,6 +362,10 @@ module Verify = struct
     | Queries (raw, dkims, preempted) ->
         let raw = { raw with response = Some (Response (record, response)) } in
         let state = Queries (raw, dkims, preempted) in
+        { decoder with state }
+    | Evaluation (inputs, cache, _) ->
+        let state =
+          Evaluation (inputs, cache, Some (Response (record, response))) in
         { decoder with state }
     | _ -> invalid_arg "Dmarc.Verify.response"
 
@@ -593,6 +377,123 @@ module Verify = struct
       DKIM.from_signature { DKIM.dkim; domain_key = dk; fields = bh; body = b }
     in
     List.map fn ctxs
+
+  (* DMARC evaluation, see RFC 9989, Section 5.3. *)
+
+  open Lookup.Syntax
+
+  (* The Authenticated Identifiers of the message (Section 4.3): the SPF Domain
+     (if SPF passes) and the DKIM Signing Domains of valid signatures. *)
+  let identifiers (inputs : inputs) (record : Record.t) =
+    let spf =
+      match (inputs.spf, Uspf.domain inputs.ctx) with
+      | `Pass _, Some domain -> [ (record.aspf, Domain_name.raw domain) ]
+      | _ -> [] in
+    let fn = function
+      | DKIM.Pass { dkim; _ } -> Some (record.adkim, Dkim.domain dkim)
+      | _ -> None in
+    let dkims = List.filter_map fn inputs.dkims in
+    (* NOTE(dinosaure): we check first identifiers which do not require any
+       DNS queries. *)
+    let cost (mode, domain) =
+      if Domain_name.equal domain inputs.domain
+      then 0
+      else match mode with `Strict -> 1 | `Relaxed -> 2 in
+    let compare a b = Int.compare (cost a) (cost b) in
+    List.stable_sort compare (spf @ dkims)
+
+  let rec any_aligned author = function
+    | [] -> Lookup.return (Ok false)
+    | (mode, identifier) :: rest -> (
+        let* aligned = Tree_walk.aligned ~mode author identifier in
+        match aligned with
+        | Ok true -> Lookup.return (Ok true)
+        | Ok false -> any_aligned author rest
+        | Error _ as err -> (
+            let+ aligned = any_aligned author rest in
+            match aligned with Ok true -> Ok true | _ -> err))
+
+  (* The Domain Owner Assessment Policy (Section 4.10.1): "p" if the record is
+     the one of the Author Domain, otherwise "sp" (if the Author Domain exists)
+     or "np" (if the Author Domain does not exist). In the absence of
+     applicable "sp" or "np", "p" is used. *)
+  let assessment ?(existence = false) (inputs : inputs)
+      (policy : Tree_walk.policy) =
+    let record = policy.record in
+    let p = Record.policy record in
+    let sp = Option.value ~default:p record.sp in
+    match (policy.author, record.np) with
+    | true, _ -> Lookup.return p
+    | false, None -> Lookup.return sp
+    | false, Some _ when not existence -> Lookup.return sp
+    | false, Some np -> (
+        let+ answer = Lookup.ask inputs.domain `Exists in
+        match answer with `No_domain -> np | _ -> sp)
+
+  (* The "t" tag (test mode) requests to apply a policy one level below the
+     specified one. *)
+  let applied (record : Record.t) policy =
+    match (record.t, policy) with
+    | false, policy -> policy
+    | true, `Reject -> `Quarantine
+    | true, (`Quarantine | `None) -> `None
+
+  let evaluate (inputs : inputs) =
+    let policy ?existence (p : Tree_walk.policy) =
+      let+ assessment = assessment ?existence inputs p in
+      let applied = applied p.record assessment in
+      Some { record = p.record; domain = p.domain; assessment; applied } in
+    let* discovered = Tree_walk.discover inputs.domain in
+    match discovered with
+    | Error `Temperror -> Lookup.return (None, `Temperror)
+    | Ok None -> Lookup.return (None, `None)
+    | Ok (Some p) when not p.record.usable ->
+        let+ policy = policy p in
+        (policy, `Permerror)
+    | Ok (Some p) -> (
+        let identifiers = identifiers inputs p.record in
+        let* aligned = any_aligned inputs.domain identifiers in
+        match aligned with
+        | Ok true ->
+            let+ policy = policy p in
+            (policy, `Pass)
+        | Ok false ->
+            let+ policy = policy ~existence:true p in
+            (policy, `Fail)
+        | Error `Temperror ->
+            let+ policy = policy p in
+            (policy, `Temperror))
+
+  let answer_of_response :
+      Lookup.kind -> response -> (Lookup.answer, _) Stdlib.result =
+   fun kind (Response (record, response)) ->
+    match (kind, record, response) with
+    | `Txt, Dns.Rr_map.Txt, Ok (_ttl, txts) ->
+        Ok (`Txt (Dns.Rr_map.Txt_set.elements txts))
+    | `Exists, _, Ok _ -> Ok `Exists
+    | _, _, Error (`No_domain _) -> Ok `No_domain
+    | _, _, Error (`No_data _) -> Ok `No_data
+    | _, _, Error (`Msg msg) -> Ok (`Error msg)
+    | `Txt, record, Ok _ -> Error (`Unexpected_response (Dns.Rr_map.K record))
+
+  let rec evaluation t (inputs : inputs) cache response =
+    match (Lookup.step cache (evaluate inputs), response) with
+    | `Done (policy, result), _ ->
+        let ({ domain; spf; ctx; dkims } : inputs) = inputs in
+        `Info ({ domain; spf; ctx; dkims; policy; result } : info)
+    | `Need (domain_name, kind), None ->
+        let state = Evaluation (inputs, cache, None) in
+        let record =
+          match kind with
+          | `Txt -> Dns.Rr_map.K Dns.Rr_map.Txt
+          | `Exists -> Dns.Rr_map.K Dns.Rr_map.A in
+        `Query ({ t with state }, domain_name, record)
+    | `Need (domain_name, kind), Some response ->
+    match answer_of_response kind response with
+    | Ok answer ->
+        let cache = Lookup.add cache domain_name kind answer in
+        evaluation t inputs cache None
+    | Error err -> err
 
   let rec extract t decoder fields =
     let open Mrmime in
@@ -634,7 +535,7 @@ module Verify = struct
       | `End prelude -> (
           let from =
             let ( let* ) = Result.bind in
-            let* { Emile.domain = domain, _; _ } = extract_from fields in
+            let* domain = extract_from fields in
             emile_domain_to_domain_name domain in
           let ctx =
             let fn = function
@@ -656,18 +557,15 @@ module Verify = struct
           | Error err, _ | _, Error err -> err
           | Ok domain, Ok ctx ->
               let spf = SPF.eval (Uspf.get_and_check ctx) in
+              let fn = function
+                | From (fn, v, _) -> Either.Left (fn, v)
+                | SPF (fn, v, _) -> Either.Left (fn, v)
+                | Field (fn, v) -> Either.Left (fn, v)
+                | DKIM (fn, v, dkim) -> Either.Right (fn, v, dkim) in
+              let others, dkims = List.partition_map fn fields in
               let raw =
-                {
-                  spf
-                ; ctx
-                ; response = None
-                ; prelude
-                ; domain
-                ; dmarc = Ask_dmarc
-                ; fields
-                ; others = []
-                ; dkims = []
-                } in
+                { spf; ctx; response = None; prelude; domain; others; dkims }
+              in
               let state = Queries (raw, [], []) in
               decode { t with state })
       | `Await ->
@@ -679,42 +577,23 @@ module Verify = struct
     go fields
 
   and queries t raw dkims preempted =
-    match (raw.dmarc, raw.spf, raw.response) with
-    | Ask_dmarc, _, None ->
-        let dn = Domain_name.prepend_label_exn raw.domain "_dmarc" in
+    match (raw.spf, raw.response) with
+    | SPF.SPF_query (dn, r, _), None ->
+        Log.debug (fun m -> m "SPF DNS query") ;
         let t = { t with state = Queries (raw, dkims, preempted) } in
-        `Query (t, dn, Dns.Rr_map.(K Txt))
-    | Ask_organization, _, None -> (
-        match organization_domain ~domain:raw.domain with
-        | None -> `DMARC_unreachable
-        | Some dn ->
-            let dn = Domain_name.prepend_label_exn dn "_dmarc" in
-            let t = { t with state = Queries (raw, dkims, preempted) } in
-            `Query (t, dn, Dns.Rr_map.(K Txt)))
-    | ((Ask_dmarc | Ask_organization) as s), _, Some (Response (r', v)) -> (
-        match (s, r', v) with
-        | Ask_dmarc, Dns.Rr_map.Txt, Error _ ->
+        `Query (t, Domain_name.raw dn, Dns.Rr_map.K r)
+    | SPF.SPF_query (_dn, r, fn), Some (Response (r', v)) -> (
+        Log.debug (fun m -> m "SPF DNS query with response") ;
+        match Refl.equal r r' with
+        | Some Refl.Refl ->
+            let spf =
+              try SPF.eval (fn v)
+              with Uspf.Result result -> SPF.SPF_result result in
+            let raw = { raw with spf } in
             let raw = { raw with response = None } in
-            let raw = { raw with dmarc = Ask_organization } in
             queries t raw dkims preempted
-        | _, Dns.Rr_map.Txt, Ok (_ttl, txts) -> (
-            let str = String.concat "" (Dns.Rr_map.Txt_set.elements txts) in
-            match Result.bind (Decoder.parse_record str) of_map with
-            | Ok dmarc ->
-                let fn = function
-                  | From (fn, v, _) -> Either.Left (fn, v)
-                  | SPF (fn, v, _) -> Either.Left (fn, v)
-                  | Field (fn, v) -> Either.Left (fn, v)
-                  | DKIM (fn, v, dkim) -> Either.Right (fn, v, dkim) in
-                let fields = raw.fields in
-                let others, dkims' = List.partition_map fn fields in
-                let raw = { raw with fields = []; others; dkims = dkims' } in
-                let raw = { raw with response = None } in
-                let raw = { raw with dmarc = DMARC dmarc } in
-                queries t raw dkims preempted
-            | Error err -> err)
-        | _ -> `Unexpected_response (Dns.Rr_map.K r'))
-    | DMARC dmarc, SPF.SPF_result spf, None -> (
+        | None -> `Unexpected_response (Dns.Rr_map.K r))
+    | SPF.SPF_result spf, None -> (
         match raw.dkims with
         | [] ->
             let prelude = Bytes.unsafe_of_string raw.prelude in
@@ -725,13 +604,13 @@ module Verify = struct
               Ctx { bh; b; dk = domain_key } in
             let ctxs = List.map fn dkims in
             let decoder = Dkim.Body.decoder () in
-            let info = { spf; ctx = raw.ctx; dmarc; domain = raw.domain } in
+            let partial : partial =
+              { domain = raw.domain; spf; ctx = raw.ctx } in
             if Bytes.length prelude > 0
             then Dkim.Body.src decoder prelude 0 (Bytes.length prelude) ;
-            let state = Body (decoder, [], ctxs, preempted, info) in
+            let state = Body (decoder, [], ctxs, preempted, partial) in
             decode { t with state }
         | (field_name, value, dkim) :: rest ->
-        (* TODO(dinosaure): expire? *)
         match Dkim.Verify.domain_key dkim with
         | Ok dn ->
             let t = { t with state = Queries (raw, dkims, preempted) } in
@@ -743,61 +622,44 @@ module Verify = struct
             let preempted = error :: preempted in
             let raw = { raw with dkims = rest } in
             queries t raw dkims preempted)
-    | _, SPF.SPF_result _, Some resp -> (
-        match (raw.dkims, resp) with
-        | ( (field_name, value, dkim) :: rest
-          , Response (Dns.Rr_map.Txt, Ok (_ttl, txts)) ) -> (
-            let txts = Dns.Rr_map.Txt_set.elements txts in
-            let txts =
-              List.map (String.concat "" % String.split_on_char ' ') txts in
-            let txts = String.concat "" txts in
-            match Dkim.domain_key_of_string txts with
-            | Ok dk ->
-                let dkim = { field_name; value; dkim; domain_key = dk } in
-                let dkims = dkim :: dkims in
-                let raw = { raw with dkims = rest } in
-                let raw = { raw with response = None } in
-                queries t raw dkims preempted
-            | Error _ ->
-                let error =
-                  DKIM.Permerror
-                    { dkim; field_name; value; error = `Invalid_domain_key }
-                in
-                let preempted = error :: preempted in
-                let raw = { raw with dkims = rest } in
-                let raw = { raw with response = None } in
-                queries t raw dkims preempted)
-        | (field_name, value, dkim) :: rest, Response (_, Error err) ->
-            let error =
-              match err with
-              | `No_data _ | `No_domain _ ->
-                  DKIM.Permerror
-                    { dkim; field_name; value; error = `Domain_key_unavailable }
-              | _ -> DKIM.Temperror { dkim } in
-            let preempted = error :: preempted in
+    | SPF.SPF_result _, Some resp ->
+    match (raw.dkims, resp) with
+    | ( (field_name, value, dkim) :: rest
+      , Response (Dns.Rr_map.Txt, Ok (_ttl, txts)) ) -> (
+        let txts = Dns.Rr_map.Txt_set.elements txts in
+        let txts = List.map (String.concat "" % String.split_on_char ' ') txts in
+        let txts = String.concat "" txts in
+        match Dkim.domain_key_of_string txts with
+        | Ok dk ->
+            let dkim = { field_name; value; dkim; domain_key = dk } in
+            let dkims = dkim :: dkims in
             let raw = { raw with dkims = rest } in
             let raw = { raw with response = None } in
             queries t raw dkims preempted
-        | (_fn, _unstrctrd, _dkim) :: _, Response (r, Ok _) ->
-            `Unexpected_response (Dns.Rr_map.K r)
-        | [], _ -> failwith "Unexpected empty DKIM list")
-    | _, SPF.SPF_query (dn, r, _), None ->
-        Log.debug (fun m -> m "SPF DNS query") ;
-        let t = { t with state = Queries (raw, dkims, preempted) } in
-        `Query (t, Domain_name.raw dn, Dns.Rr_map.K r)
-    | _, SPF.SPF_query (_dn, r, fn), Some (Response (r', v)) -> (
-        Log.debug (fun m -> m "SPF DNS query with response") ;
-        match Refl.equal r r' with
-        | Some Refl.Refl ->
-            let spf =
-              try SPF.eval (fn v)
-              with Uspf.Result result -> SPF.SPF_result result in
-            let raw = { raw with spf } in
+        | Error _ ->
+            let error =
+              DKIM.Permerror
+                { dkim; field_name; value; error = `Invalid_domain_key } in
+            let preempted = error :: preempted in
+            let raw = { raw with dkims = rest } in
             let raw = { raw with response = None } in
-            queries t raw dkims preempted
-        | None -> `Unexpected_response (Dns.Rr_map.K r))
+            queries t raw dkims preempted)
+    | (field_name, value, dkim) :: rest, Response (_, Error err) ->
+        let error =
+          match err with
+          | `No_data _ | `No_domain _ ->
+              DKIM.Permerror
+                { dkim; field_name; value; error = `Domain_key_unavailable }
+          | _ -> DKIM.Temperror { dkim } in
+        let preempted = error :: preempted in
+        let raw = { raw with dkims = rest } in
+        let raw = { raw with response = None } in
+        queries t raw dkims preempted
+    | (_fn, _unstrctrd, _dkim) :: _, Response (r, Ok _) ->
+        `Unexpected_response (Dns.Rr_map.K r)
+    | [], _ -> failwith "Unexpected empty DKIM list"
 
-  and digest t decoder stack ctxs preempted info =
+  and digest t decoder stack ctxs preempted (partial : partial) =
     let rec go stack results =
       match Dkim.Body.decode decoder with
       | (`Spaces _ | `CRLF) as x -> go (x :: stack) results
@@ -810,10 +672,7 @@ module Verify = struct
           let results = List.map fn results in
           go [] results
       | `Await ->
-          (* let fn (Ctx { bh; b }) =
-            Ctx { bh; b = Dkim.Digest.digest_wsp stack b } in
-          let results = List.map fn results in *)
-          let state = Body (decoder, stack, results, preempted, info) in
+          let state = Body (decoder, stack, results, preempted, partial) in
           let rem = src_rem t in
           let input_pos = t.input_pos + rem in
           `Await { t with state; input_pos }
@@ -823,29 +682,25 @@ module Verify = struct
           let results = List.map fn results in
           let dkims = signatures results in
           let dkims = List.rev_append preempted dkims in
-          let check = DKIM.aligned ~dmarc:info.dmarc ~domain:info.domain in
-          let dmarc =
-            if
-              SPF.aligned ~dmarc:info.dmarc ~domain:info.domain info.ctx
-              && SPF.pass info.spf
-              || List.exists check dkims
-            then `Pass
-            else `Fail in
-          `Info (info, dkims, dmarc) in
+          let ({ domain; spf; ctx } : partial) = partial in
+          let inputs : inputs = { domain; spf; ctx; dkims } in
+          let state = Evaluation (inputs, Lookup.empty, None) in
+          evaluation { t with state } inputs Lookup.empty None in
     go stack ctxs
 
   and decode t =
     match t.state with
     | Extraction (decoder, fields) -> extract t decoder fields
     | Queries (raw, dkims, preempted) -> queries t raw dkims preempted
-    | Body (decoder, stack, ctxs, preempted, info) ->
-        digest t decoder stack ctxs preempted info
+    | Body (decoder, stack, ctxs, preempted, partial) ->
+        digest t decoder stack ctxs preempted partial
+    | Evaluation (inputs, cache, response) -> evaluation t inputs cache response
 end
 
 module Encoder = struct
   open Prettym
 
-  let spf ?receiver ppf info =
+  let spf ?receiver ppf (info : Verify.info) =
     let domain ppf domain_name =
       eval ppf [ char $ '@'; !!string ] (Domain_name.to_string domain_name)
     in
@@ -853,8 +708,8 @@ module Encoder = struct
       match (Uspf.origin ctx, Uspf.domain ctx) with
       | Some `HELO, Some v ->
           eval ppf
-            [ fws; string $ "smtp.helo"; cut; char $ '='; cut; !!domain ]
-            v
+            [ fws; string $ "smtp.helo"; cut; char $ '='; cut; !!string ]
+            (Domain_name.to_string v)
       | Some `MAILFROM, Some v ->
           eval ppf
             [ fws; string $ "smtp.mailfrom"; cut; char $ '='; cut; !!domain ]
@@ -863,8 +718,8 @@ module Encoder = struct
     eval ppf
       [
         tbox 1; string $ "spf"; cut; char $ '='; cut; !!Uspf.Encoder.result
-      ; spaces 1; !!(Uspf.Encoder.comment ~ctx:info.Verify.ctx ?receiver)
-      ; !!smtp; char $ ';'; close; new_line
+      ; spaces 1; !!(Uspf.Encoder.comment ~ctx:info.ctx ?receiver); !!smtp
+      ; char $ ';'; close; new_line
       ]
       info.spf info.spf info.ctx
 
@@ -911,23 +766,35 @@ module Encoder = struct
           ]
           value
 
-  let dmarc_comment ppf dmarc =
-    let policy ppf = function
-      | Value.None -> string ppf "NONE"
-      | Value.Quarantine -> string ppf "QUARANTINE"
-      | Value.Reject -> string ppf "REJECT" in
-    let p ppf (value, _) =
-      eval ppf [ string $ "p"; cut; char $ '='; cut; !!policy ] value in
-    let sp ppf (_, value) =
-      eval ppf [ string $ "sp"; cut; char $ '='; cut; !!policy ] value in
-    eval ppf
-      [ spaces 1; char $ '('; !!p; spaces 1; !!sp; char $ ')' ]
-      dmarc.policy dmarc.policy
+  let policy ppf = function
+    | `None -> string ppf "NONE"
+    | `Quarantine -> string ppf "QUARANTINE"
+    | `Reject -> string ppf "REJECT"
 
-  let dmarc ppf (info, value) =
-    let result ppf = function
-      | `Pass -> string ppf "pass"
-      | `Fail -> string ppf "fail" in
+  let dmarc_comment ppf = function
+    | None -> ppf
+    | Some { Verify.record; _ } ->
+        let p = Record.policy record in
+        let sp = Option.value ~default:p record.Record.sp in
+        let np ppf = function
+          | None -> ppf
+          | Some np ->
+              eval ppf
+                [ spaces 1; string $ "np"; cut; char $ '='; cut; !!policy ]
+                np in
+        let t ppf = function
+          | false -> ppf
+          | true -> eval ppf [ spaces 1; string $ "t=y" ] in
+        eval ppf
+          [
+            spaces 1; char $ '('; string $ "p"; cut; char $ '='; cut; !!policy
+          ; spaces 1; string $ "sp"; cut; char $ '='; cut; !!policy; !!np; !!t
+          ; char $ ')'
+          ]
+          p sp record.Record.np record.Record.t
+
+  let dmarc ppf (info : Verify.info) =
+    let result ppf v = string ppf (Fmt.str "%a" Verify.pp_result v) in
     let from ppf domain_name =
       eval ppf
         [ string $ "header.from"; cut; char $ '='; cut; !!string ]
@@ -937,7 +804,7 @@ module Encoder = struct
         string $ "dmarc"; cut; char $ '='; cut; !!result; !!dmarc_comment
       ; spaces 1; !!from
       ]
-      value info.Verify.dmarc info.Verify.domain
+      info.result info.policy info.domain
 
   let domain_name ppf = function
     | `Addr (Emile.IPv4 v) -> eval ppf [ !!string ] (Ipaddr.V4.to_string v)
@@ -949,23 +816,23 @@ module Encoder = struct
         eval ppf [ !!(list ~sep string) ] vs
     | `Literal v -> eval ppf [ char $ '['; !!string; char $ ']' ] v
 
-  let value ~receiver ppf (info, dkims, value) =
+  let value ~receiver ppf (info : Verify.info) =
     let sep = ((fun ppf () -> eval ppf [ cut ]), ()) in
     eval ppf
       [
         !!domain_name; char $ ';'; fws; !!(spf ~receiver); fws
       ; !!(list ~sep dkim); !!dmarc
       ]
-      receiver info dkims (info, value)
+      receiver info info.dkims info
 
-  let field ~receiver ppf results =
-    eval ppf [ tbox 1; !!(value ~receiver); close; new_line ] results
+  let field ~receiver ppf info =
+    eval ppf [ tbox 1; !!(value ~receiver); close; new_line ] info
 end
 
 let field_authentication_results = Mrmime.Field_name.v "Authentication-Results"
 
-let to_field ~receiver result =
-  let v = Prettym.to_string (Encoder.field ~receiver) result in
+let to_field ~receiver info =
+  let v = Prettym.to_string (Encoder.field ~receiver) info in
   let _, v = Result.get_ok (Unstrctrd.of_string v) in
   (field_authentication_results, v)
 
@@ -1352,7 +1219,7 @@ module Authentication_results = struct
     let _, value = Result.get_ok v in
     value
 
-  let of_verification ~receiver (info, dkims, result) =
+  let of_verification ~receiver (info : Verify.info) =
     let servid =
       match receiver with
       | `Addr (Emile.IPv4 v) -> Ipaddr.V4.to_string v
@@ -1361,9 +1228,9 @@ module Authentication_results = struct
       | `Domain vs -> String.concat "." vs
       | `Literal v -> Fmt.str "[%s]" v in
     let spf =
-      let value = Prettym.to_string Uspf.Encoder.result info.Verify.spf in
+      let value = Prettym.to_string Uspf.Encoder.result info.spf in
       let properties =
-        match (Uspf.origin info.Verify.ctx, Uspf.domain info.Verify.ctx) with
+        match (Uspf.origin info.ctx, Uspf.domain info.ctx) with
         | Some `HELO, Some v ->
             let value = `Value (Domain_name.to_string v) in
             [ { ty = "smtp"; property = "helo"; value } ]
@@ -1408,11 +1275,11 @@ module Authentication_results = struct
               [ selector; domain; b ] in
         { meth = "dkim"; version = None; reason = None; value; properties }
       in
-      List.map fn dkims in
+      List.map fn info.dkims in
     let dmarc =
-      let value = match result with `Pass -> "pass" | `Fail -> "fail" in
+      let value = Fmt.str "%a" Verify.pp_result info.result in
       let properties =
-        let value = `Value (Domain_name.to_string info.Verify.domain) in
+        let value = `Value (Domain_name.to_string info.domain) in
         [ { ty = "header"; property = "from"; value } ] in
       { meth = "dmarc"; version = None; reason = None; value; properties } in
     let results = [ spf ] in
