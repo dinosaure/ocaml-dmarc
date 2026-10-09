@@ -1,15 +1,6 @@
 (executable
- (name organization_domains)
- (libraries dmarc alcotest))
-
-(executable
  (name parser)
  (libraries dmarc alcotest))
-
-(rule
- (alias runtest)
- (action
-  (run ./organization_domains.exe)))
 
 (rule
  (alias runtest)
