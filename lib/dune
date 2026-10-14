@@ -1,5 +1,5 @@
 (library
  (name dmarc)
  (public_name dmarc)
- (modules dmarc sigs value)
- (libraries logs public-suffix dns mrmime uri dkim uspf))
+ (modules dmarc value record lookup tree_walk report)
+ (libraries logs fmt domain-name dns mrmime uri dkim uspf))
