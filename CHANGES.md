@@ -1,3 +1,7 @@
+## v0.0.3 (2026-10-15)
+
+- Re-implement dmarc according to RFC 9989 (@dinosaure, #21)
+
 ## v0.0.2 (2026-04-27)
 
 - Update our `public_suffix_list.dat` (@dinosaure, #19)
